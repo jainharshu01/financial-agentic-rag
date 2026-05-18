@@ -2,6 +2,25 @@ import os
 import re
 import json
 
+def extract_year_from_filing_id(filing_id):
+    """
+    Extract filing year from SEC filing ID.
+    
+    Example:
+    0000320193-24-000123 -> 2024
+    """
+    
+    try:
+        parts = filing_id.split("-")
+        short_year = parts[1]
+
+        # Convert 24 -> 2024
+        year = int(f"20{short_year}")
+
+        return year
+
+    except Exception:
+        return None
 # ============================================================
 # METHOD 1: Fixed-size chunking
 # ============================================================
@@ -10,6 +29,8 @@ def chunk_fixed(text, company, filing_id, chunk_size=500, overlap=100):
     words = text.split()
     chunks = []
     chunk_num = 0
+
+    year = extract_year_from_filing_id(filing_id)
 
     for i in range(0, len(words), chunk_size - overlap):
         chunk_words = words[i:i + chunk_size]
@@ -20,6 +41,7 @@ def chunk_fixed(text, company, filing_id, chunk_size=500, overlap=100):
         chunks.append({
             "chunk_id": f"{company}_{filing_id}_fixed_{chunk_num}",
             "company": company,
+            "year": year,
             "filing_id": filing_id,
             "chunk_method": "fixed",
             "section": "unknown",
@@ -76,6 +98,8 @@ def chunk_by_section(text, company, filing_id, max_chunk_size=800):
     chunks = []
     chunk_num = 0
 
+    year = extract_year_from_filing_id(filing_id)
+
     for section_name, section_text in sections.items():
         words = section_text.split()
 
@@ -84,6 +108,7 @@ def chunk_by_section(text, company, filing_id, max_chunk_size=800):
             chunks.append({
                 "chunk_id": f"{company}_{filing_id}_section_{chunk_num}",
                 "company": company,
+                "year": year,
                 "filing_id": filing_id,
                 "chunk_method": "section",
                 "section": section_name,
@@ -99,6 +124,7 @@ def chunk_by_section(text, company, filing_id, max_chunk_size=800):
                 chunks.append({
                     "chunk_id": f"{company}_{filing_id}_section_{chunk_num}",
                     "company": company,
+                    "year": year,
                     "filing_id": filing_id,
                     "chunk_method": "section",
                     "section": section_name,

@@ -44,6 +44,7 @@ def build_vectorstore(chunk_file, collection_name):
         metadatas = [
             {
                 "company": c["company"],
+                "year": c["year"],
                 "filing_id": c["filing_id"],
                 "chunk_method": c["chunk_method"],
                 "section": c["section"]

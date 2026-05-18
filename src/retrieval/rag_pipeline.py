@@ -22,10 +22,11 @@ def retrieve_chunks(question, collection_name="section_chunks", company=None, to
     query_embedding = embedding_model.encode(question).tolist()
     
     # Build filter if company specified
+    # Build filter if company specified
     where_filter = None
+
     if company:
         where_filter = {"company": company}
-    
     results = collection.query(
         query_embeddings=[query_embedding],
         n_results=top_k,
@@ -95,8 +96,13 @@ def rag_answer(question, company=None, collection_name="section_chunks", top_k=2
     for i in range(len(results["ids"][0])):
         meta = results["metadatas"][0][i]
         dist = results["distances"][0][i]
-        print(f"  [{i+1}] {meta['company']} | {meta['section']} | Distance: {dist:.4f}")
-    
+        print(
+            f"  [{i+1}] "
+            f"{meta['company']} | "
+            f"Year: {meta['year']} | "
+            f"{meta['section']} | "
+            f"Distance: {dist:.4f}"
+        )
     # Generate answer
     print("\nGenerating answer...")
     answer = generate_answer(question, results)
