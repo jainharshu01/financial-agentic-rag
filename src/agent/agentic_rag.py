@@ -6,6 +6,9 @@ from sentence_transformers import SentenceTransformer
 from query_classifier import classify_query
 from router import build_retrieval_strategy
 
+from query_parser import extract_years
+
+
 
 # ============================================================
 # LOAD MODELS + VECTOR DB
@@ -48,9 +51,26 @@ def retrieve_chunks_agentic(
     if company:
         filters.append({"company": company})
 
-    if year:
-        filters.append({"year": year})
+    query_years = extract_years(question)
 
+    # Use query years if present
+    if len(query_years) > 0:
+        if len(query_years) == 1:
+            filters.append({"year": query_years[0]})
+
+        else:
+            year_filters = []
+            for y in query_years:
+                year_filters.append({"year": y})
+
+            filters.append({
+                "$or": year_filters
+            })
+
+    # Otherwise use provided year
+    elif year:
+        filters.append({"year": year})
+    
     if section:
         filters.append({"section": section})
 
@@ -204,7 +224,7 @@ def agentic_answer(
 if __name__ == "__main__":
 
     agentic_answer(
-        question="What were Apple's major risk factors?",
+        question="Compare Apple's risks between 2023 and 2024",
         company="AAPL",
         year=2024
     )

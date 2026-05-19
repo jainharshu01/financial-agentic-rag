@@ -52,8 +52,38 @@ def build_retrieval_strategy(question):
         strategy["use_comparison"] = True
         strategy["top_k"] = 6
 
-    return strategy
+        q = question.lower()
 
+        # Comparative risk queries
+        if any(word in q for word in [
+            "risk",
+            "risks",
+            "challenge",
+            "threat"
+        ]):
+
+            strategy["section"] = "Risk Factors"
+
+        # Comparative financial queries
+        elif any(word in q for word in [
+            "revenue",
+            "income",
+            "profit",
+            "sales",
+            "earnings"
+        ]):
+
+            strategy["section"] = "Financial Statements"
+
+        # Comparative summary/outlook queries
+        elif any(word in q for word in [
+            "outlook",
+            "summary",
+            "overview"
+        ]):
+
+            strategy["section"] = "MD&A"
+    return strategy
 
 # ============================================================
 # TESTS
