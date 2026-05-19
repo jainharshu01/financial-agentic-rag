@@ -7,6 +7,7 @@ from query_classifier import classify_query
 from router import build_retrieval_strategy
 
 from query_parser import extract_years
+from self_check import should_retry
 
 
 
@@ -210,13 +211,62 @@ def agentic_answer(
 
     answer = generate_answer(question, results)
 
+    print("\nInitial Answer:\n")
     print(answer)
+
+    # ========================================================
+    # SELF-CHECK
+    # ========================================================
+
+    retry = should_retry(results, answer)
+
+    # ========================================================
+    # RETRY IF NEEDED
+    # ========================================================
+
+    if retry:
+
+        print("\nRetrying with broader retrieval...\n")
+
+        # Retry with broader retrieval
+        collection = client.get_collection(name="section_chunks")
+
+        query_embedding = embedding_model.encode(question).tolist()
+
+        retry_results = collection.query(
+            query_embeddings=[query_embedding],
+            n_results=8
+        )
+
+        print("\nRetry Retrieved Sources:\n")
+
+        for i in range(len(retry_results["ids"][0])):
+
+            meta = retry_results["metadatas"][0][i]
+            dist = retry_results["distances"][0][i]
+
+            print(
+                f"[{i+1}] "
+                f"{meta['company']} | "
+                f"Year: {meta['year']} | "
+                f"{meta['section']} | "
+                f"Distance: {dist:.4f}"
+            )
+
+        print("\nGenerating Retry Answer...\n")
+
+        retry_answer = generate_answer(question, retry_results)
+
+        print("\nRetry Answer:\n")
+        print(retry_answer)
+
+        answer = retry_answer
 
     print("\n" + "="*60)
 
     return answer
 
-
+    
 # ============================================================
 # TEST
 # ============================================================
