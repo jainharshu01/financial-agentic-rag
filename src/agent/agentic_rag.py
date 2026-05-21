@@ -259,10 +259,16 @@ def agentic_answer(
         print(retry_answer)
 
         answer = retry_answer
+        results = retry_results
 
     print("\n" + "="*60)
 
-    return answer
+    return {
+        "answer": answer,
+        "results": results,
+        "strategy": strategy,
+        "retry_used": retry
+    }
 
     
 # ============================================================

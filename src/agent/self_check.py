@@ -1,10 +1,21 @@
-def should_retry(answer, results):
+def should_retry(results,answer):
     """
     Decide whether retrieval should retry.
     """
 
-    distances = results["distances"][0]
+    # ========================================================
+    # SAFETY CHECK
+    # ========================================================
 
+    if not isinstance(results, dict):
+
+        print("ERROR: results is not a dictionary.")
+        print("Received type:", type(results))
+
+        return False
+
+    distances = results["distances"][0]
+    
     avg_distance = sum(distances) / len(distances)
 
     print(f"\nAverage Retrieval Distance: {avg_distance:.4f}")

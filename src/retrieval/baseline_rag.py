@@ -159,7 +159,11 @@ def baseline_answer(question, company=None, year=None, top_k=3):
 
     print("\n" + "="*60)
 
-    return answer
+    return {
+        "answer": answer,
+        "results": results,
+        "retry_used": False
+    }
 
 
 # ============================================================
