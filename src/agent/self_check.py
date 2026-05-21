@@ -1,4 +1,4 @@
-def should_retry(results, answer):
+def should_retry(answer, results):
     """
     Decide whether retrieval should retry.
     """
@@ -10,27 +10,38 @@ def should_retry(results, answer):
     print(f"\nAverage Retrieval Distance: {avg_distance:.4f}")
 
     # ========================================================
-    # Retry if retrieval quality weak
+    # RETRY ONLY IF RETRIEVAL IS VERY BAD
     # ========================================================
 
-    if avg_distance > 0.55:
+    if avg_distance > 0.65:
 
         print("Retry triggered: retrieval distances too high.")
 
         return True
 
     # ========================================================
-    # Retry if model says insufficient evidence
+    # RETRY ONLY FOR STRONG FAILURE SIGNALS
     # ========================================================
 
-    if "insufficient evidence" in answer.lower():
+    failure_phrases = [
 
-        print("Retry triggered: insufficient evidence detected.")
+        "no relevant information",
+        "unable to answer",
+        "documents do not contain",
+        "context does not contain"
+    ]
 
-        return True
+    answer_lower = answer.lower()
+
+    for phrase in failure_phrases:
+
+        if phrase in answer_lower:
+
+            print(f"Retry triggered: detected '{phrase}'")
+
+            return True
 
     return False
-
 
 # ============================================================
 # TEST

@@ -1,5 +1,4 @@
-from query_classifier import classify_query
-
+from src.agent.query_classifier import classify_query
 
 def build_retrieval_strategy(question):
     """

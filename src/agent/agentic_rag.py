@@ -3,12 +3,10 @@ import ollama
 
 from sentence_transformers import SentenceTransformer
 
-from query_classifier import classify_query
-from router import build_retrieval_strategy
-
-from query_parser import extract_years
-from self_check import should_retry
-
+from src.agent.query_classifier import classify_query
+from src.agent.router import build_retrieval_strategy
+from src.agent.query_parser import extract_years
+from src.agent.self_check import should_retry
 
 
 # ============================================================
