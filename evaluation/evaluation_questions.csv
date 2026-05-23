@@ -1,0 +1,41 @@
+question,company,year,expected_section,gold_answer,answer_type
+What was Apple's total net revenue in fiscal year 2024?,AAPL,2024,Financial Statements,Apple reported total net revenues of $391 billion in fiscal 2024.,numeric
+What was Apple's net income in 2023?,AAPL,2023,Financial Statements,Apple's net income for fiscal 2023 was approximately $97 billion.,numeric
+What was Tesla's total revenue in 2024?,TSLA,2024,Financial Statements,Tesla's total revenues for 2024 were approximately $97.7 billion.,numeric
+What was Microsoft's total revenue in fiscal year 2024?,MSFT,2024,Financial Statements,Microsoft reported total revenues of approximately $245 billion in fiscal 2024.,numeric
+What was Amazon's net sales in 2024?,AMZN,2024,Financial Statements,Amazon's total net sales in 2024 were approximately $638 billion.,numeric
+What was Google's (Alphabet) total revenue in 2024?,GOOGL,2024,Financial Statements,Alphabet reported total revenues of approximately $350 billion in 2024.,numeric
+What was Apple's gross margin in 2024?,AAPL,2024,Financial Statements,Apple's gross margin for fiscal 2024 was approximately 46%.,numeric
+What was Tesla's automotive revenue in 2023?,TSLA,2023,Financial Statements,Tesla's automotive revenues for 2023 were approximately $82.4 billion.,numeric
+What was Microsoft's operating income in fiscal 2024?,MSFT,2024,Financial Statements,Microsoft's operating income for fiscal 2024 was approximately $109 billion.,numeric
+What was Amazon's AWS revenue in 2024?,AMZN,2024,Financial Statements,Amazon Web Services reported revenues of approximately $108 billion in 2024.,numeric
+What are Apple's primary risk factors in 2024?,AAPL,2024,Risk Factors,"Apple faces risks including global competition, supply chain concentration in China, intellectual property disputes, and regulatory scrutiny.",risk
+What cybersecurity risks did Microsoft disclose in 2024?,MSFT,2024,Risk Factors,Microsoft disclosed risks including nation-state cyberattacks on its infrastructure and vulnerabilities in its cloud services that could affect customer data.,risk
+What supply chain risks did Tesla mention in 2024?,TSLA,2024,Risk Factors,Tesla cited risks from dependence on single-source suppliers for certain components and exposure to raw material price volatility including lithium and cobalt.,risk
+What regulatory risks did Amazon disclose in 2023?,AMZN,2023,Risk Factors,Amazon highlighted antitrust scrutiny in the US and EU and evolving data privacy regulations as key regulatory risks.,risk
+What competition risks did Google face in 2024?,GOOGL,2024,Risk Factors,Alphabet identified risks from competition in search advertising from Microsoft Bing and emerging AI tools as well as competition in cloud from AWS and Azure.,risk
+What macroeconomic risks did Apple disclose in 2023?,AAPL,2023,Risk Factors,Apple cited foreign exchange headwinds and consumer spending slowdowns in key markets as macroeconomic risks in its 2023 filing.,risk
+What geopolitical risks did Tesla mention in 2024?,TSLA,2024,Risk Factors,Tesla disclosed risks from US-China trade tensions and potential tariffs on goods manufactured in or imported from China.,risk
+What are Microsoft's AI-related risks in 2024?,MSFT,2024,Risk Factors,Microsoft cited risks around AI accuracy and potential for generating harmful content as well as reputational and legal risks tied to its AI products.,risk
+What are Apple's main business segments?,AAPL,2024,Business,Apple operates through product segments including iPhone Mac iPad Wearables Home and Accessories and a Services segment.,descriptive
+What does Tesla describe as its mission?,TSLA,2024,Business,Tesla describes its mission as accelerating the world's transition to sustainable energy.,descriptive
+What are Microsoft's primary business segments?,MSFT,2024,Business,"Microsoft organizes its business into Productivity and Business Processes, Intelligent Cloud, and More Personal Computing segments.",descriptive
+How does Amazon describe its AWS business?,AMZN,2024,Business,Amazon describes AWS as a comprehensive on-demand cloud computing platform offering compute storage database and other services.,descriptive
+What is Alphabet's primary source of revenue?,GOOGL,2024,Business,Alphabet's primary revenue source is Google advertising which includes Google Search and YouTube advertising.,descriptive
+What properties does Apple own or lease for operations?,AAPL,2024,Business,"Apple owns and leases approximately 31.4 million square feet of space globally, including its corporate campus Apple Park in Cupertino, California.",descriptive
+What is Apple's strategy for the services business?,AAPL,2024,MD&A,Apple's MD&A describes its strategy of growing high-margin services revenue through the App Store Apple Music iCloud and Apple TV+ to reduce reliance on hardware cycles.,descriptive
+Compare Apple's net revenue between 2023 and 2024,AAPL,,Financial Statements,Apple's net revenue grew from approximately $383 billion in 2023 to $391 billion in 2024 representing modest growth of around 2%.,comparative
+Compare Tesla's total revenue between 2023 and 2024,TSLA,,Financial Statements,Tesla's total revenues grew from approximately $97.7 billion in 2023 to a similar level in 2024 with growth slowing significantly compared to prior years.,comparative
+Compare Microsoft's operating income between 2023 and 2024,MSFT,,Financial Statements,Microsoft's operating income increased from approximately $88 billion in fiscal 2023 to $109 billion in fiscal 2024.,comparative
+Compare Apple's risk factors between 2023 and 2024,AAPL,,Risk Factors,"In both years Apple cited competition, supply chain concentration, and regulatory risks. In 2024 Apple placed greater emphasis on AI-related regulatory risks compared to 2023.",comparative
+Compare Amazon's revenue between 2023 and 2024,AMZN,,Financial Statements,Amazon's net sales grew from approximately $575 billion in 2023 to $638 billion in 2024.,comparative
+Compare Google's advertising revenue between 2023 and 2024,GOOGL,,Financial Statements,Alphabet's Google advertising revenues grew from approximately $238 billion in 2023 to over $265 billion in 2024.,comparative
+Compare Tesla's risk disclosures between 2023 and 2024,TSLA,,Risk Factors,Tesla's 2024 filing expanded risk disclosures around EV competition from legacy automakers and Chinese manufacturers compared to the 2023 filing which focused more on supply chain.,comparative
+Compare Microsoft's cloud revenue between 2023 and 2024,MSFT,,Financial Statements,Microsoft's Intelligent Cloud segment revenue grew from approximately $87 billion in fiscal 2023 to $106 billion in fiscal 2024 driven by Azure growth.,comparative
+What is Apple's business outlook for 2024?,AAPL,2024,MD&A,Apple's MD&A for 2024 outlines continued investment in AI features services growth and geographic expansion as key near-term priorities.,descriptive
+What does Tesla's MD&A say about future product plans?,TSLA,2024,MD&A,Tesla's MD&A discusses plans for new lower-cost vehicle models and expansion of its energy storage and Supercharger businesses.,descriptive
+What does Microsoft's management say about AI opportunity?,MSFT,2024,MD&A,Microsoft's MD&A highlights Copilot integration across its product suite and Azure AI services as a major growth driver expecting continued investment in data center capacity.,descriptive
+What does Amazon's management say about profitability in 2024?,AMZN,2024,MD&A,Amazon's MD&A describes improved profitability driven by AWS margin expansion and improved operating leverage in its North America segment.,descriptive
+What cybersecurity disclosures did Apple make in 2024?,AAPL,2024,Risk Factors,Apple disclosed risks from potential security breaches of its services and customer data and described its cybersecurity governance framework.,risk
+What does Google disclose about regulatory risk in 2024?,GOOGL,2024,Risk Factors,Alphabet cited ongoing DOJ antitrust litigation targeting its search distribution agreements and potential regulatory changes in the EU as significant regulatory risks in 2024.,risk
+What does Tesla disclose about its energy storage business?,TSLA,2024,Business,Tesla describes its energy storage business including Megapack and Powerwall products as a growing revenue stream separate from its automotive segment.,descriptive
