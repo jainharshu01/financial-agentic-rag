@@ -2,11 +2,12 @@
 evaluation/run_evaluation.py
 
 Automated evaluation pipeline.
-
 - Loads evaluation_questions.csv
 - Runs EVERY question through baseline_rag and agentic_rag
 - Stores results to evaluation/results.csv
 - No manual question input required.
+
+UPDATE: Citation regex now accepts (Source N), [Source N], and bare Source N.
 
 Run:
     python -m evaluation.run_evaluation
@@ -46,11 +47,22 @@ RESULTS_CSV = EVAL_DIR / "results.csv"
 # HELPERS
 # ============================================================
 
-CITATION_PATTERN = re.compile(r"\(source\s*\d+\)", re.IGNORECASE)
+# FLEXIBLE CITATION REGEX
+# Matches: (Source 1), [Source 2], Source 3, (source 4), [source 5], source 6
+CITATION_PATTERN = re.compile(
+    r"[\(\[]?\s*source\s*\d+\s*[\)\]]?",
+    re.IGNORECASE
+)
 
 
 def citations_present(answer: str) -> bool:
+    """Return True if any citation format is present."""
     return bool(CITATION_PATTERN.search(answer))
+
+
+def count_citations(answer: str) -> int:
+    """Count total citation occurrences."""
+    return len(CITATION_PATTERN.findall(answer))
 
 
 def extract_sections_from_results(results: dict) -> list:
@@ -73,7 +85,6 @@ def load_questions(csv_path: Path) -> list:
     with open(csv_path, newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
-            # Convert year to int if present
             year_val = row.get("year", "").strip()
             row["year"] = int(year_val) if year_val.isdigit() else None
             questions.append(row)
@@ -96,10 +107,8 @@ def run_one(
 ) -> dict:
     """
     Run a single question through the specified pipeline.
-
     Args:
         pipeline: 'baseline' or 'agentic'
-
     Returns:
         dict with all logged fields.
     """
@@ -138,6 +147,7 @@ def run_one(
         retrieved_sections = extract_sections_from_results(results)
         sec_acc = section_accuracy(retrieved_sections, expected_section)
         has_citations = citations_present(answer)
+        n_citations = count_citations(answer)
 
         # Validation dict (agentic only)
         validation = response.get("validation", {})
@@ -162,6 +172,7 @@ def run_one(
             "retrieved_sections": "|".join(retrieved_sections),
             "section_accuracy": sec_acc,
             "citations_present": has_citations,
+            "citation_count": n_citations,
             "years_coverage_ok": years_coverage_ok,
             "numeric_present": numeric_present,
             "overall_valid": overall_valid,
@@ -189,11 +200,77 @@ def run_one(
             "retrieved_sections": "",
             "section_accuracy": False,
             "citations_present": False,
+            "citation_count": 0,
             "years_coverage_ok": False,
             "numeric_present": False,
             "overall_valid": False,
             "error": str(e),
         }
+
+
+# ============================================================
+# SUMMARY STATS — print at end so you can see improvements
+# ============================================================
+
+def print_summary(rows: list):
+    """Print aggregate metrics per pipeline for quick comparison."""
+
+    print("\n" + "=" * 70)
+    print("EVALUATION SUMMARY")
+    print("=" * 70)
+
+    for pipeline in ["baseline", "agentic"]:
+        pipe_rows = [r for r in rows if r["pipeline"] == pipeline]
+        if not pipe_rows:
+            continue
+
+        n = len(pipe_rows)
+        avg_latency = sum(r["response_time_sec"] for r in pipe_rows) / n
+        avg_sim = sum(r["avg_similarity"] for r in pipe_rows) / n
+        top_sim = sum(r["top_similarity"] for r in pipe_rows) / n
+        sec_acc_pct = sum(1 for r in pipe_rows if r["section_accuracy"]) / n * 100
+        cit_pct = sum(1 for r in pipe_rows if r["citations_present"]) / n * 100
+        retry_pct = sum(1 for r in pipe_rows if r["retry_used"]) / n * 100
+
+        # Per-type breakdown
+        type_breakdown = {}
+        for r in pipe_rows:
+            t = r["answer_type"]
+            if t not in type_breakdown:
+                type_breakdown[t] = {"n": 0, "sec_acc": 0, "cit": 0}
+            type_breakdown[t]["n"] += 1
+            if r["section_accuracy"]:
+                type_breakdown[t]["sec_acc"] += 1
+            if r["citations_present"]:
+                type_breakdown[t]["cit"] += 1
+
+        # Comparison completeness (comparative queries only)
+        comp_rows = [r for r in pipe_rows if r["answer_type"] == "comparative"]
+        if comp_rows:
+            comp_complete_pct = (
+                sum(1 for r in comp_rows if r["years_coverage_ok"]) / len(comp_rows) * 100
+            )
+        else:
+            comp_complete_pct = None
+
+        print(f"\n--- {pipeline.upper()} ---")
+        print(f"  Avg Latency:        {avg_latency:.2f} s")
+        print(f"  Avg Similarity:     {avg_sim:.2f} %")
+        print(f"  Top Similarity:     {top_sim:.2f} %")
+        print(f"  Section Accuracy:   {sec_acc_pct:.1f} %")
+        print(f"  Citation Rate:      {cit_pct:.1f} %")
+        print(f"  Retry Frequency:    {retry_pct:.1f} %")
+        if comp_complete_pct is not None:
+            print(f"  Comp. Completeness: {comp_complete_pct:.1f} %")
+
+        print(f"\n  Per-Type Section Accuracy:")
+        for t in sorted(type_breakdown.keys()):
+            stats = type_breakdown[t]
+            sa = stats["sec_acc"] / stats["n"] * 100
+            ci = stats["cit"] / stats["n"] * 100
+            print(f"    {t:14s} n={stats['n']:2d}  sec_acc={sa:5.1f}%  cit={ci:5.1f}%")
+
+    print("\n" + "=" * 70)
 
 
 # ============================================================
@@ -249,7 +326,8 @@ def run_evaluation():
         "expected_section", "gold_answer", "generated_answer",
         "response_time_sec", "retry_used", "avg_similarity", "top_similarity",
         "retrieved_chunks", "retrieved_sections", "section_accuracy",
-        "citations_present", "years_coverage_ok", "numeric_present",
+        "citations_present", "citation_count",
+        "years_coverage_ok", "numeric_present",
         "overall_valid", "error",
     ]
 
@@ -261,6 +339,9 @@ def run_evaluation():
     print(f"\n{'='*70}")
     print(f"Evaluation complete. Results saved to: {RESULTS_CSV}")
     print(f"Total rows: {len(all_rows)} ({total} questions × 2 pipelines)")
+
+    # Print the summary so you can see improvements
+    print_summary(all_rows)
 
     return all_rows
 

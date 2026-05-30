@@ -1,353 +1,288 @@
-# 📊 Financial Agentic RAG System
+# Financial Agentic RAG — SEC 10-K Question Answering
 
-[![HuggingFace Space](https://img.shields.io/badge/🤗-HuggingFace%20Space-yellow)](https://huggingface.co/spaces/jainharshu/financial-agentic-rag)
 [![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/downloads/)
 
-An **intelligent document retrieval and question-answering system** for analyzing SEC 10-K filings using **Retrieval-Augmented Generation (RAG)** with agentic enhancements. Compare baseline static retrieval against dynamic agentic routing, reranking, retry mechanisms, and answer validation.
+A research-grade Retrieval-Augmented Generation (RAG) system for answering natural-language questions over SEC 10-K filings, comparing a **baseline static pipeline** against an **agentic pipeline** that adds query classification, hybrid retrieval (dense + BM25 with Reciprocal Rank Fusion), cross-encoder reranking, exact-fact lookup via SEC XBRL, answer validation, and retry logic.
 
-🔗 **[Live Demo on HuggingFace Spaces](https://huggingface.co/spaces/jainharshu/financial-agentic-rag)**
-
----
-
-## 🎯 Project Overview
-
-This system processes **SEC 10-K filings** from five major companies (Apple, Amazon, Google, Microsoft, Tesla) across multiple years (2022-2025) and enables natural language queries with **grounded, cited answers**.
-
-### Key Features
-
-- **Dual Pipeline Architecture**: Side-by-side comparison of Baseline RAG vs. Agentic RAG
-- **Intelligent Query Classification**: Automatically detects numeric, risk-based, descriptive, and comparative queries
-- **Dynamic Section Routing**: Routes queries to the most relevant document sections (Business, Risk Factors, MD&A, Financial Statements)
-- **Semantic Reranking**: Post-retrieval reranking using sentence-transformers for improved relevance
-- **Retry Mechanism**: Automatically broadens search when initial retrieval yields low-confidence results
-- **Answer Validation**: Checks for citation presence, unsupported claims, year coverage, and numeric accuracy
-- **Source Grounding**: All answers include citations to specific source chunks with similarity scores
-- **Automated Evaluation**: 40-question benchmark with metrics for section accuracy, citation rate, latency, and retrieval quality
+Built on 20 annual 10-K filings from 5 large US technology companies (Apple, Amazon, Alphabet, Microsoft, Tesla; fiscal years 2022–2025).
 
 ---
 
-## 🏗️ System Architecture
+## Research question
+
+> *Can an agentic RAG pipeline — combining hybrid retrieval, structured XBRL fact injection, cross-encoder reranking, and answer validation — produce measurably more accurate and better-grounded answers on SEC 10-K filings than a single-stage dense-retrieval baseline, on a benchmark of 40 manually-curated questions across numeric, comparative, risk, and descriptive query types?*
+
+---
+
+## Headline results (40-question benchmark, 80 runs)
+
+| Metric | Baseline RAG | Agentic RAG |
+|---|---:|---:|
+| **Numeric accuracy** *(exact, vs SEC XBRL, ±2% tol.)* | **0 / 16** (0%) | **10 / 16** (62.5%) |
+| Section accuracy | 75% | 75% |
+| Citation rate | 90% | 88% |
+| Comparison completeness | 100% | 87.5% |
+| Avg retrieval similarity | 65.4% | 76.9% |
+| Avg latency | 1.4 s | 20.6 s |
+| Retry frequency | n/a | 12.5% |
+
+**Headline finding.** On objective numeric questions, the baseline failed every single one (typically returning *"Insufficient evidence in the provided documents"*); the agentic pipeline answered 62.5% correctly to within 2% of the XBRL ground truth. The cost is a ~15× latency increase, driven primarily by the cross-encoder reranker and additional generation passes.
+
+The two pipelines are roughly equivalent on prose-style risk and descriptive questions, where the bottleneck is generation rather than retrieval. The agentic pipeline's wins are concentrated where structured grounding helps — numeric and comparative queries.
+
+---
+
+## What's novel about this build
+
+Most public RAG tutorials wire up a single embedder + Chroma + an LLM. This project is built specifically for SEC filings, where that minimal recipe fails on the most common question type (numeric facts), and it adds five concrete layers on top:
+
+1. **Table-aware parsing.** HTML tables are extracted with `pandas.read_html` and serialized as Markdown *before* the prose is flattened, so row/column relationships survive into the chunks.
+2. **Context-injected chunking.** Every chunk's embedded text begins with a header (`[Apple Inc. (AAPL) | FY2024 | 10-K | Section: Risk Factors]`), giving the embedder global context the metadata alone never reached.
+3. **Hybrid retrieval with Reciprocal Rank Fusion.** A BM25 index runs alongside dense retrieval (`bge-small-en-v1.5`); results are fused by rank using RRF (k=60), then reranked with a cross-encoder (`ms-marco-MiniLM-L-6-v2`).
+4. **XBRL exact-fact path.** Numeric queries pull exact values from the free SEC XBRL companyfacts API (`data.sec.gov`) and inject them as an authoritative source ahead of the LLM call — eliminating an entire class of numeric hallucination.
+5. **Query-aware routing and validation.** A classifier routes queries by type (numeric / risk / descriptive / comparative) to type-specific retrieval strategies; generated answers are validated for citations, year coverage, and numeric presence, with a retry on failure.
+
+---
+
+## System architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                         User Query                               │
-└────────────────────────────┬────────────────────────────────────┘
-                             │
-                ┌────────────┴────────────┐
-                │  Query Classifier        │
-                │  (numeric/risk/desc/comp)│
-                └────────────┬────────────┘
-                             │
-                ┌────────────┴────────────┐
-                │  Section Router          │
-                │  (Business/Risk/MD&A/FS) │
-                └────────────┬────────────┘
-                             │
-         ┌───────────────────┴───────────────────┐
-         │                                       │
-    ┌────▼─────┐                          ┌─────▼─────┐
-    │ Baseline │                          │  Agentic  │
-    │   RAG    │                          │    RAG    │
-    └────┬─────┘                          └─────┬─────┘
-         │                                      │
-         │  ┌─────────────────────────────┐    │
-         │  │ ChromaDB Vectorstore        │◄───┤
-         │  │ (all-MiniLM-L6-v2 embeddings)│    │
-         │  └─────────────────────────────┘    │
-         │                                      │
-         │                              ┌───────▼────────┐
-         │                              │  Reranker      │
-         │                              │  (similarity)  │
-         │                              └───────┬────────┘
-         │                                      │
-         │                              ┌───────▼────────┐
-         │                              │  LLM (Groq)    │
-         │                              │  llama-3.3-70b │
-         │                              └───────┬────────┘
-         │                                      │
-         │                              ┌───────▼────────┐
-         │                              │  Validator     │
-         │                              │  (citations,   │
-         │                              │   grounding)   │
-         │                              └───────┬────────┘
-         │                                      │
-         │                              ┌───────▼────────┐
-         │                              │  Retry Logic   │
-         │                              │  (if needed)   │
-         │                              └───────┬────────┘
-         │                                      │
-         └──────────────┬───────────────────────┘
-                        │
-                ┌───────▼────────┐
-                │  Final Answer  │
-                │  with Citations│
-                └────────────────┘
+                                User question
+                                       │
+                          ┌────────────┴────────────┐
+                          │   Query Classifier      │ classifier
+                          │ numeric / risk / desc / │
+                          │       comparative       │
+                          └────────────┬────────────┘
+                                       │
+                          ┌────────────┴────────────┐
+                          │     Section Router      │  router
+                          │ Risk Factors / MD&A /   │
+                          │ Business / FinStmts ... │
+                          └────────────┬────────────┘
+                                       │
+            ┌──────────────────────────┼──────────────────────────┐
+            │                          │                          │
+   ┌────────▼────────┐    ┌────────────▼────────────┐    ┌────────▼────────┐
+   │ ChromaDB        │    │   BM25 lexical index    │    │ SEC XBRL facts  │
+   │ (bge-small,     │    │ (rank_bm25 + financial  │    │ (companyfacts   │
+   │  context-       │    │  synonym expansion)     │    │  API, exact     │
+   │  injected       │    └────────────┬────────────┘    │  GAAP numbers)  │
+   │  chunks)        │                 │                 └────────┬────────┘
+   └────────┬────────┘                 │                          │
+            │                          │                          │
+            └──────────────┬───────────┘                          │
+                           │                                      │
+                  ┌────────▼─────────┐                            │
+                  │ Reciprocal Rank  │                            │
+                  │ Fusion (k=60)    │                            │
+                  └────────┬─────────┘                            │
+                           │                                      │
+                  ┌────────▼─────────┐                            │
+                  │ Cross-encoder    │                            │
+                  │ rerank           │                            │
+                  └────────┬─────────┘                            │
+                           │                                      │
+                           └──────────────┬───────────────────────┘
+                                          │
+                              ┌───────────▼───────────┐
+                              │  Groq LLM             │
+                              │  llama-3.3-70b        │
+                              │  (XBRL as Source 1)   │
+                              └───────────┬───────────┘
+                                          │
+                              ┌───────────▼───────────┐
+                              │ Answer validator      │
+                              │ (citations / years /  │
+                              │  numeric / grounded)  │
+                              └───────────┬───────────┘
+                                          │
+                                  (retry if invalid)
+                                          │
+                                  ┌───────▼────────┐
+                                  │ Final answer   │
+                                  │ + citations    │
+                                  └────────────────┘
 ```
 
 ---
 
-## 📁 Repository Structure
+## Repository layout
 
 ```
 financial-agentic-rag/
+├── app.py                              # Streamlit chat UI
+├── requirements.txt
+├── runtime.txt                         # python-3.11
+├── README.md                           # this file
+├── .env.example                        # GROQ_API_KEY + SEC_USER_AGENT
+│
 ├── src/
 │   ├── ingestion/
-│   │   ├── download_filings.py      # SEC EDGAR downloader
-│   │   └── parse_filings.py         # HTML → structured sections
+│   │   ├── download_filings.py         # SEC EDGAR HTML pull (5 tickers, last 3 yrs)
+│   │   └── xbrl_facts.py               # SEC XBRL companyfacts API → exact GAAP numbers
 │   ├── preprocessing/
-│   │   ├── chunk_filings.py         # Semantic chunking (500-token overlapping)
-│   │   ├── parse_filings.py         # Section extraction logic
-│   │   └── verify_parsing.py        # Validation of parsed data
+│   │   ├── parse_filings.py            # Table-aware HTML → Markdown text + tables.json
+│   │   ├── chunk_filings.py            # Token-aware, context-injected chunking
+│   │   └── verify_parsing.py
 │   ├── retrieval/
-│   │   ├── build_vectorstore.py     # ChromaDB initialization
-│   │   ├── baseline_rag.py          # Static retrieval pipeline
-│   │   ├── rag_pipeline.py          # Core retrieval logic
-│   │   ├── reranker.py              # Post-retrieval reranking
-│   │   └── test_retrieval.py        # Unit tests for retrieval
-│   └── agent/
-│       ├── query_classifier.py      # Query type detection
-│       ├── router.py                # Section routing strategy
-│       ├── agentic_rag.py           # Dynamic agentic pipeline
-│       ├── answer_validator.py      # Answer quality checks
-│       └── self_check.py            # Internal validation logic
+│   │   ├── build_vectorstore.py        # bge-small embeddings → ChromaDB
+│   │   ├── bm25_index.py               # In-memory BM25 + synonym expansion
+│   │   ├── fusion.py                   # Reciprocal Rank Fusion
+│   │   ├── reranker.py                 # cross-encoder/ms-marco-MiniLM-L-6-v2
+│   │   ├── baseline_rag.py             # Static dense-only pipeline
+│   │   └── rag_pipeline.py             # (legacy; safe to delete)
+│   ├── agent/
+│   │   ├── query_classifier.py
+│   │   ├── router.py
+│   │   ├── query_parser.py             # year extraction
+│   │   ├── company_parser.py           # ticker detection from natural language
+│   │   ├── financial_synonyms.py       # revenue ↔ net sales, etc.
+│   │   ├── self_check.py               # distance-based retry trigger
+│   │   ├── answer_validator.py         # citations / year coverage / numeric checks
+│   │   └── agentic_rag.py              # main agentic pipeline
+│   └── utils/
+│       └── sec_urls.py                 # Build SEC EDGAR filing URLs
+│
 ├── evaluation/
-│   ├── evaluation_questions.csv     # 40-question benchmark
-│   ├── run_evaluation.py            # Automated evaluation pipeline
-│   ├── metrics.py                   # Metric computation (Hit@k, section accuracy, etc.)
-│   ├── dashboard.py                 # Streamlit evaluation dashboard
-│   └── results.csv                  # Evaluation results (auto-generated)
-├── data/
-│   ├── vectorstore/                 # ChromaDB persistent storage (221MB)
-│   ├── chunks/                      # Chunked filings (JSON)
-│   └── processed/                   # Parsed section-level filings
-├── app.py                           # Main Streamlit UI
-├── requirements.txt                 # Python dependencies
-├── runtime.txt                      # Python version for deployment
-├── .env.example                     # Environment variable template
-├── .gitignore
-└── README.md
+│   ├── evaluation_questions.csv        # 40 manually-curated Q&A pairs
+│   ├── run_evaluation.py               # Runs every Q through both pipelines
+│   ├── metrics.py                      # Section accuracy, citations, latency, etc.
+│   ├── metrics_synonym_patch.py        # Synonym-normalized gold-overlap metric
+│   ├── numeric_grader.py               # Objective numeric grading vs gold
+│   ├── llm_judge.py                    # LLM-as-judge for prose answers (optional)
+│   ├── dashboard.py                    # Streamlit results dashboard
+│   └── results.csv                     # Auto-generated by run_evaluation
+│
+└── data/
+    ├── raw_filings/                    # SEC EDGAR HTML (downloaded; gitignored)
+    ├── processed/                      # Parsed text + .tables.json (gitignored)
+    ├── chunks/                         # JSON chunks (gitignored)
+    ├── vectorstore/                    # ChromaDB persistent store (gitignored)
+    └── xbrl/                           # XBRL facts cache + facts_lookup.json
 ```
 
 ---
 
+## Quick start
 
 ### Prerequisites
 
-- **Python 3.11** (required for dependency compatibility)
-- **Groq API Key** (free tier: [console.groq.com](https://console.groq.com))
+- Python 3.11
+- A free [Groq API key](https://console.groq.com) (`GROQ_API_KEY`)
+- A descriptive User-Agent for the SEC API (`SEC_USER_AGENT` — e.g. `"YourProject your-email@example.com"`)
 
-
-## 🧪 Evaluation & Benchmarking
-
-### Running the Benchmark
-
-The evaluation pipeline tests both RAG approaches on **40 curated questions** across 4 categories:
+### Setup
 
 ```bash
-python -m evaluation.run_evaluation
+git clone <repo-url>
+cd financial-agentic-rag
+python -m venv venv
+# Windows: venv\Scripts\activate
+# macOS/Linux: source venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env       # then edit .env with your keys
 ```
 
-This generates `evaluation/results.csv` with metrics for:
-- **Section Accuracy**: Did the router pick the right section?
-- **Citation Rate**: Percentage of answers with proper citations
-- **Retrieval Quality**: Average and top similarity scores
-- **Latency**: Response time per pipeline
-- **Retry Frequency**: How often the agentic pipeline needed a second attempt
-
-### Viewing Results
+### Build the data pipeline (once)
 
 ```bash
+# 1. Download 10-K HTML filings from EDGAR
+python -m src.ingestion.download_filings
+
+# 2. Parse HTML → text (with Markdown tables preserved)
+python -m src.preprocessing.parse_filings
+
+# 3. Fetch exact financial numbers from SEC XBRL
+python -m src.ingestion.xbrl_facts
+
+# 4. Chunk filings with context headers
+python -m src.preprocessing.chunk_filings
+
+# 5. Build the ChromaDB vector store
+python -m src.retrieval.build_vectorstore
+```
+
+### Run the app
+
+```bash
+streamlit run app.py
+```
+
+### Run the benchmark
+
+```bash
+python -m evaluation.run_evaluation       # ~20 min on free Groq tier
+python -m evaluation.numeric_grader        # Objective numeric scoring
+python -m evaluation.metrics_synonym_patch # Token overlap on prose answers
 streamlit run evaluation/dashboard.py
 ```
 
-The dashboard includes:
-- **Response time comparison** (baseline vs. agentic)
-- **Similarity distributions** (avg vs. top)
-- **Retry frequency** pie chart
-- **Section accuracy by query type**
-- **Citation presence rates**
-- **Individual answer review** (side-by-side with gold answers)
+---
 
-### Sample Benchmark Results
+## Tech stack
 
-| Metric                     | Baseline RAG | Agentic RAG |
-|----------------------------|--------------|-------------|
-| **Avg Response Time**      | 4.53s        | 6.33s       |
-| **Section Accuracy**       | 85%          | 85%         |
-| **Citation Rate**          | 55%          | 57%         |
-| **Avg Similarity**         | 53%          | 52%         |
-| **Retry Frequency**        | N/A          | 10%         |
-| **Comparison Completeness**| 100%         | 87.5%       |
+| Layer | Choice | Why |
+|---|---|---|
+| Embeddings | `BAAI/bge-small-en-v1.5` | 384-dim, 512-token context, strong on retrieval benchmarks |
+| Vector store | ChromaDB (persistent) | Zero-config, metadata-filtering, fits HF Spaces |
+| Lexical retrieval | `rank_bm25` (in-memory) | Pure-Python, exact-token matching critical for finance |
+| Fusion | Reciprocal Rank Fusion (k=60) | Rank-based, robust to score-scale mismatch |
+| Reranker | `cross-encoder/ms-marco-MiniLM-L-6-v2` | ~80MB, real query-document scoring (not bi-encoder) |
+| LLM | `llama-3.3-70b-versatile` via Groq | Fast inference, free tier sufficient for benchmark |
+| Structured numerics | SEC XBRL companyfacts API | Free, no key, exact GAAP-tagged values |
+| UI | Streamlit | Single-file deployable; same on local + HF Spaces |
 
 ---
 
-## 🔧 Technical Details
+## Evaluation methodology
 
-### Tech Stack
+The benchmark contains **40 manually-curated questions** spanning four types:
 
-| Component           | Technology                          |
-|---------------------|-------------------------------------|
-| **Embeddings**      | `sentence-transformers/all-MiniLM-L6-v2` |
-| **Vector Store**    | ChromaDB 0.5.x (persistent local)   |
-| **LLM**             | Groq API (llama-3.3-70b-versatile)  |
-| **Reranker**        | Bi-encoder cosine similarity        |
-| **UI Framework**    | Streamlit 1.37.0                    |
-| **Visualization**   | Plotly, custom CSS (DM Sans font)   |
+| Type | Count | Example |
+|---|---:|---|
+| numeric | 10 | "What was Apple's total net revenue in fiscal year 2024?" |
+| comparative | 8 | "Compare Tesla's total revenue between 2023 and 2024" |
+| risk | 10 | "What cybersecurity risks did Microsoft disclose in 2024?" |
+| descriptive | 12 | "What are Apple's main business segments?" |
 
-### Data Pipeline
+### Grading approach
 
-1. **Download** — SEC EDGAR API pulls HTML filings for 5 companies × 4 years = 20 filings
-2. **Parse** — BeautifulSoup extracts 4 sections per filing (Business, Risk Factors, MD&A, Financial Statements)
-3. **Chunk** — Semantic chunking with 500-token windows, 50-token overlap → ~1,200 chunks
-4. **Embed** — SentenceTransformers generates 384-dim vectors
-5. **Store** — ChromaDB persists embeddings + metadata (company, year, section, chunk_id)
+Different question types are graded differently, because there is no single metric that works for both "$391 billion" and "Apple faces risks including global competition, supply chain concentration ...":
 
-### Query Processing
+- **Numeric & comparative answers with gold figures (22 questions)** — graded objectively by `numeric_grader.py`. The grader extracts dollar/percent values from gold and generated answers and counts an answer correct if every gold figure is matched to within 2% (absorbing rounding like "391 billion" ≈ "391.04 billion"). No human judgment.
+- **Risk & descriptive answers (18 questions)** — graded by synonym-normalized token overlap (`metrics_synonym_patch.py`). Financial synonyms ("revenue" ↔ "net sales", "profit" ↔ "net income") are collapsed before computing recall, so SEC-correct terminology is not penalized.
+- **Optional LLM-as-judge** (`llm_judge.py`) — a second-opinion score on the 18 prose answers using the same Groq LLM with a strict rubric. Useful as cross-validation; **not** treated as ground truth.
 
-**Baseline RAG:**
-1. Classify query type
-2. Route to section (static mapping)
-3. Retrieve top-k chunks (k=5)
-4. Generate answer with LLM
-5. Return answer + sources
+### Honest limitations of the methodology
 
-**Agentic RAG:**
-1. Classify query type
-2. Route to section
-3. Retrieve top-k chunks (k=3 initially)
-4. **Rerank** chunks by semantic similarity
-5. Generate answer with LLM
-6. **Validate** answer (citations, grounding, year coverage)
-7. **Retry** with broader k=8 if validation fails
-8. Return answer + validation metadata + sources
+- 40 questions is a small benchmark; ±5% movement on a metric can be one or two questions flipping.
+- The LLM-as-judge is a model judging another model's output and tends to reward longer, more detailed answers; treat its scores as directional, not authoritative.
+- Three numeric questions (AWS revenue, Tesla automotive revenue, Google advertising revenue) target *segment* figures that are not standard top-line GAAP tags. The XBRL path cannot resolve these and falls back to retrieved tables.
+- Gross margin is computed as a derived ratio (`GrossProfit / Revenue`) per fiscal year; not all filings tag both consistently.
 
 ---
 
-## 📊 Retrieval Strategy
+## Known limitations and future work
 
-### Section Routing Logic
-
-| Query Type      | Target Section(s)              | Example                                    |
-|-----------------|--------------------------------|--------------------------------------------|
-| **Numeric**     | Financial Statements, MD&A     | "What was Apple's revenue in 2023?"        |
-| **Risk**        | Risk Factors                   | "What are Tesla's cybersecurity risks?"    |
-| **Descriptive** | Business, MD&A                 | "Describe Google's search business model"  |
-| **Comparative** | Multi-year retrieval (OR filter)| "Compare Amazon's risks 2023 vs 2024"     |
-
-### Metadata Filtering
-
-ChromaDB filters applied:
-```python
-# Single company, single year
-{"company": "AAPL", "year": 2023, "section": "Risk Factors"}
-
-# Comparative (multi-year)
-{"company": "AAPL", "$or": [{"year": 2023}, {"year": 2024}]}
-```
-
-### Retry Logic
-
-If initial retrieval yields:
-- Avg similarity < 40%, OR
-- Top similarity < 50%, OR
-- Validator detects missing citations/years
-
-→ Retry with `top_k=8` while **preserving original section filter**
+- **Latency.** The cross-encoder rerank dominates agentic latency (~20s per question on free-tier infra). On HuggingFace Spaces' free CPU this can be higher. Setting `USE_RERANK = False` in `src/agent/agentic_rag.py` skips it, falling back to RRF only — faster but with some quality loss.
+- **Segment financials.** Questions targeting business segments (e.g. "Amazon's AWS revenue") need either the SEC XBRL `frames` API for segment-tagged concepts, or richer table-chunk routing. Currently underperforms.
+- **LLM-as-judge bias.** Reported as a secondary metric only; spot-checking 5 random rows is recommended.
+- **Conversational memory.** Each question is stateless. Could be added with `st.session_state` if needed.
+- **No re-fine-tuning.** A finance-specific embedding model (e.g. Fin-E5) would likely lift retrieval further but is out of scope for this iteration.
 
 ---
 
-## 📈 Performance Considerations
+## Acknowledgments
 
-### Latency Breakdown
-
-**Baseline RAG** (~4.5s):
-- Retrieval: ~0.2s
-- LLM inference: ~4.0s
-- Formatting: ~0.3s
-
-**Agentic RAG** (~6.3s):
-- Retrieval: ~0.2s
-- Reranking: ~0.4s
-- LLM inference: ~4.0s
-- Validation: ~0.2s
-- Retry (when triggered): +1.5s
-- Formatting: ~0.3s
-
-### Optimization Opportunities
-
-1. **Batch reranking** — vectorize all candidates at once instead of per-chunk
-2. **Cache embeddings** — avoid re-embedding frequent queries
-3. **Streaming LLM responses** — show partial answers while generating
-4. **Parallel retrieval** — for multi-year comparative queries
-5. **Cross-encoder reranking** — better accuracy than bi-encoder (but slower)
+- **SEC EDGAR** for free, machine-readable filings and the XBRL companyfacts API.
+- **Anthropic** for design discussion and architecture review during development.
+- **Groq** for free-tier LLM inference.
+- **ChromaDB**, **sentence-transformers**, **rank_bm25**, and **Streamlit** maintainers.
 
 ---
 
-## 🐛 Known Limitations
-
-1. **Citation detection regex** — model sometimes outputs "Source 1" without parentheses; metric expects "(Source 1)"
-2. **Chunking granularity** — some numeric facts fall across chunk boundaries, causing "insufficient evidence" responses
-3. **Section router accuracy** — ~15% of queries route to wrong section (especially descriptive queries mapped to MD&A instead of Business)
-4. **Comparison completeness** — agentic pipeline sometimes retrieves only one year in multi-year queries despite OR filter
-5. **No conversational memory** — each query is stateless (could add with `st.session_state`)
-
----
-
-## 🛠️ Development
-
-### Adding New Companies
-
-1. Update `COMPANIES` list in `src/ingestion/download_filings.py`
-2. Run download and parsing:
-   ```bash
-   python -m src.ingestion.download_filings
-   python -m src.preprocessing.chunk_filings
-   ```
-3. Rebuild vectorstore:
-   ```bash
-   python -m src.retrieval.build_vectorstore
-   ```
-
-### Modifying Chunking Strategy
-
-Edit `src/preprocessing/chunk_filings.py`:
-- `chunk_size`: Default 500 tokens
-- `chunk_overlap`: Default 50 tokens
-- Adjust based on your use case (larger chunks = more context, fewer total chunks)
-
-### Extending Evaluation
-
-Add questions to `evaluation/evaluation_questions.csv`:
-```csv
-question,company,year,expected_section,gold_answer,answer_type
-"New question here",AAPL,2023,Risk Factors,"Expected answer",risk
-```
-
-Run: `python -m evaluation.run_evaluation`
-
----
-
-## 📚 References & Resources
-
-- **SEC EDGAR API**: [sec.gov/developer](https://www.sec.gov/developer)
-- **ChromaDB Docs**: [docs.trychroma.com](https://docs.trychroma.com)
-- **SentenceTransformers**: [sbert.net](https://www.sbert.net)
-- **Groq API**: [console.groq.com](https://console.groq.com)
-- **Streamlit**: [docs.streamlit.io](https://docs.streamlit.io)
-
----
-
-## 🙏 Acknowledgments
-
-- **Anthropic** for Claude API and guidance
-- **Groq** for fast LLM inference
-- **HuggingFace** for hosting the demo Space
-- **ChromaDB** team for the excellent vector database
-- **Streamlit** for making ML UIs accessible
-
----
-
-## 📞 Contact
+## Contact
 
 **Harshita Saraogi** — harshitasaraogi01@gmail.com
 

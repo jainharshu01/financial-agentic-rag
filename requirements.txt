@@ -1,25 +1,35 @@
 ﻿# ============================================================
 # Financial Agentic RAG — Runtime Requirements
 # Python 3.11 (set via runtime.txt)
-# Only what the running app needs — no data-prep tools
 # ============================================================
 
 # ---- Core RAG stack ----
 chromadb>=0.5.0,<0.6.0
 sentence-transformers>=3.0.0,<4.0.0
 torch>=2.3.0
+transformers>=4.40.0          # tokenizer for token-aware chunking
+
+# ---- Hybrid retrieval (NEW) ----
+rank-bm25>=0.2.2              # sparse BM25 lexical channel
 
 # ---- LLM API ----
 groq>=0.9.0
 httpx==0.27.2
+
+# ---- Ingestion / parsing (NEW) ----
+beautifulsoup4>=4.12.0
+lxml>=5.0.0
+pandas>=2.0.0
+requests>=2.31.0             # SEC XBRL companyfacts API
+sec-edgar-downloader>=5.0.0  # only needed to (re)download raw filings
 
 # ---- Web framework ----
 streamlit==1.37.0
 plotly>=5.22.0
 
 # ---- Data ----
-pandas>=2.0.0
 numpy>=1.26.0,<2.0.0
 
 # ---- Env ----
 python-dotenv>=1.0.0
+tqdm>=4.66.0

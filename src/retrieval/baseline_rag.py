@@ -1,73 +1,59 @@
 """
-src/retrieval/baseline_rag.py
+src/retrieval/baseline_rag.py   (REPLACES the old version)
 
-Static RAG pipeline.
+Baseline static RAG. Kept deliberately simple as the comparison point.
 
-Changes from original:
-- Improved prompt that encourages grounded synthesis instead of "Insufficient evidence".
-- Post-retrieval reranking via reranker.py before answer generation.
-- Citation format standardized to (Source X).
-- Strict section filtering in retrieve_chunks().
+ONLY CHANGES vs old version:
+- Embedding model -> BAAI/bge-small-en-v1.5 (matches the new vectorstore).
+- bge wants a short instruction prefix on the QUERY (not documents):
+  "Represent this sentence for searching relevant passages:".
+- normalize_embeddings=True (cosine space).
+Everything else (filters, auto-detect, generation) is unchanged so the
+baseline-vs-agentic comparison stays fair.
 """
 
-import chromadb
 import os
+import chromadb
+
+from sentence_transformers import SentenceTransformer
 from groq import Groq
 from dotenv import load_dotenv
-from sentence_transformers import SentenceTransformer
-from src.retrieval.reranker import rerank_results
 
-# ============================================================
-# LOAD API KEY + LLM
-# ============================================================
+from src.agent.company_parser import extract_companies
 
 load_dotenv()
+
+EMBED_MODEL_NAME = "BAAI/bge-small-en-v1.5"
+QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
+
+embedding_model = SentenceTransformer(EMBED_MODEL_NAME)
+client = chromadb.PersistentClient(path="data/vectorstore")
 groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
-# ============================================================
-# LOAD EMBEDDING MODEL + VECTOR DB
-# ============================================================
 
-embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
-client = chromadb.PersistentClient(path="data/vectorstore")
+def _embed_query(question):
+    return embedding_model.encode(
+        QUERY_PREFIX + question, normalize_embeddings=True
+    ).tolist()
 
 
-# ============================================================
-# RETRIEVE CHUNKS
-# ============================================================
-
-def retrieve_chunks(
-    question: str,
-    company: str = None,
-    year: int = None,
-    section: str = None,
-    top_k: int = 3
-) -> dict:
-    """
-    Semantic retrieval with optional metadata filtering.
-
-    Args:
-        question: User question string.
-        company:  Ticker symbol e.g. 'AAPL'. Optional.
-        year:     Filing year as int. Optional.
-        section:  SEC section name e.g. 'Risk Factors'. Optional.
-        top_k:    Number of results to return.
-
-    Returns:
-        ChromaDB query results dict.
-    """
-
+def retrieve_chunks(question, company=None, year=None, section=None, top_k=5):
     collection = client.get_collection(name="section_chunks")
-    query_embedding = embedding_model.encode(question).tolist()
-
-    filters = []
+    query_embedding = _embed_query(question)
 
     if company:
-        filters.append({"company": company})
+        target_companies = [company]
+    else:
+        target_companies = extract_companies(question)
 
+    filters = []
+    if target_companies:
+        if len(target_companies) == 1:
+            filters.append({"company": target_companies[0]})
+        else:
+            filters.append({"$or": [{"company": c} for c in target_companies]})
     if year:
         filters.append({"year": year})
-
     if section:
         filters.append({"section": section})
 
@@ -78,159 +64,98 @@ def retrieve_chunks(
     else:
         where_filter = {"$and": filters}
 
-    results = collection.query(
+    return collection.query(
         query_embeddings=[query_embedding],
         n_results=top_k,
-        where=where_filter
+        where=where_filter,
     )
 
-    return results
 
-
-# ============================================================
-# GENERATE ANSWER — GROQ
-# ============================================================
-
-def generate_answer(question: str, results: dict) -> str:
-    """
-    Generate answer using Groq (llama-3.3-70b-versatile) with retrieved context.
-
-    Prompt improvements over the original:
-    - Instructs model to synthesize, not merely report absence.
-    - Uses (Source X) citation format.
-    - Encourages numeric precision and comparative structure.
-    """
-
+def generate_answer(question, results):
     context_parts = []
-
     for i in range(len(results["ids"][0])):
-        doc = results["documents"][0][i][:1200]
+        doc = results["documents"][0][i][:600]
         meta = results["metadatas"][0][i]
         context_parts.append(
-            f"[Source {i+1}] "
-            f"Company: {meta['company']} | "
-            f"Year: {meta['year']} | "
-            f"Section: {meta['section']}\n\n"
-            f"{doc}"
+            f"[Source {i+1}] Company: {meta['company']} | "
+            f"Year: {meta['year']} | Section: {meta['section']} \n\n{doc}"
         )
-
     context = "\n\n---\n\n".join(context_parts)
 
-    prompt = f"""You are a senior financial analyst specializing in SEC 10-K filings.
+    prompt = f"""You are a financial document analyst.
 
-Your task is to answer the question below using ONLY the provided source excerpts.
+Answer the user's question using ONLY the provided SEC filing context.
 
-STRICT RULES:
-1. Base your answer entirely on the provided sources. Do NOT use outside knowledge.
-2. Cite every claim using the format (Source X) — e.g., (Source 1), (Source 2).
-3. If multiple sources say the same thing, cite all relevant ones.
-4. Synthesize information across sources; do not simply repeat them verbatim.
-5. If the question is comparative (two years or two companies), explicitly address BOTH sides.
-6. Include specific numbers, percentages, and dollar figures when present in the sources.
-7. Only say evidence is insufficient if genuinely NO relevant information appears in ANY source.
-   If partial information exists, present what is available and note what is missing.
-8. Keep the answer concise and structured. Use bullet points for lists of risks or factors.
+RULES:
+1. Do NOT use outside knowledge.
+2. Cite sources using (Source X) format — always include the parentheses.
+3. For cross-company comparisons, mention EACH company and cite sources from each.
+4. Include specific numbers when relevant.
+5. If evidence is insufficient, say: "Insufficient evidence in the provided documents."
 
-Context from SEC Filings:
+Context:
 {context}
 
-Question: {question}
+Question:
+{question}
 
 Answer:"""
 
-    try:
-        response = groq_client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=1024,
-            temperature=0.2,
-        )
-        return response.choices[0].message.content
-    except Exception as e:
-        return f"LLM generation failed: {str(e)}"
+    response = groq_client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.2,
+    )
+    return response.choices[0].message.content
 
 
-# ============================================================
-# BASELINE RAG PIPELINE
-# ============================================================
-
-def baseline_answer(
-    question: str,
-    company: str = None,
-    year: int = None,
-    section: str = None,
-    top_k: int = 3
-) -> dict:
-    """
-    Full baseline RAG pipeline: retrieve → rerank → generate.
-    If section is not passed, it is derived from the query type automatically.
-    """
-
-    # Auto-derive section from query type if not explicitly provided
-    if section is None:
-        from src.agent.router import build_retrieval_strategy
-        strategy = build_retrieval_strategy(question)
-        section = strategy.get("section")
-
-    print("\n" + "="*60)
+def baseline_answer(question, company=None, year=None, section=None, top_k=5):
+    print("\n" + "=" * 60)
     print("BASELINE STATIC RAG")
-    print("="*60)
+    print("=" * 60)
     print(f"\nQuestion: {question}")
-    print(f"Company: {company} | Year: {year} | Section: {section}")
+    print(f"Company: {company or '[auto-detect]'}")
+    print(f"Year: {year}")
+    print(f"Section: {section}")
 
-    # Retrieve
     results = retrieve_chunks(
-        question=question,
-        company=company,
-        year=year,
-        section=section,
-        top_k=top_k
+        question=question, company=company,
+        year=year, section=section, top_k=top_k,
     )
 
-    # Rerank
-    results = rerank_results(question, results)
-
     distances = results["distances"][0]
+    if not distances:
+        return {
+            "answer": "No relevant documents found.",
+            "results": results, "retry_used": False,
+            "avg_similarity": 0, "top_similarity": 0, "retrieved_chunks": 0,
+        }
+
     avg_distance = round(sum(distances) / len(distances), 4)
     avg_similarity = round((1 - avg_distance) * 100, 2)
     top_similarity = round((1 - min(distances)) * 100, 2)
 
-    print("\nRetrieved Sources (after reranking):\n")
+    print("\nRetrieved Sources:\n")
     for i in range(len(results["ids"][0])):
         meta = results["metadatas"][0][i]
         dist = results["distances"][0][i]
-        print(
-            f"[{i+1}] "
-            f"{meta['company']} | "
-            f"Year: {meta['year']} | "
-            f"{meta['section']} | "
-            f"Distance: {dist:.4f}"
-        )
+        print(f"[{i+1}] {meta['company']} | Year: {meta['year']} | "
+              f"{meta['section']} | Distance: {dist:.4f}")
 
-    # Generate
     print("\nGenerating answer...\n")
     answer = generate_answer(question, results)
     print(answer)
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
 
     return {
-        "answer": answer,
-        "results": results,
-        "retry_used": False,
-        "avg_similarity": avg_similarity,
-        "top_similarity": top_similarity,
+        "answer": answer, "results": results, "retry_used": False,
+        "avg_similarity": avg_similarity, "top_similarity": top_similarity,
         "retrieved_chunks": len(distances),
     }
 
 
-# ============================================================
-# TEST
-# ============================================================
-
 if __name__ == "__main__":
     baseline_answer(
-        question="What were Apple's major risk factors?",
-        company="AAPL",
-        year=2024
-        # section is intentionally omitted — auto-derived from router
+        question="Compare Tesla's revenue with Apple's in 2024",
+        company=None,
     )

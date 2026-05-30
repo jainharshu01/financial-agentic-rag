@@ -1,148 +1,103 @@
 """
-src/retrieval/reranker.py
+src/retrieval/reranker.py   (REPLACES the old version)
 
-Post-retrieval reranker using sentence-transformers cosine similarity
-between the query and each retrieved chunk.
+Cross-encoder reranker.
 
-Design notes:
-- We intentionally avoid a cross-encoder (e.g. cross-encoder/ms-marco-*)
-  so we do NOT add a second heavy model to the stack.
-- Instead we re-score using the same bi-encoder already loaded project-wide
-  (all-MiniLM-L6-v2).  This is a lightweight but effective approach:
-  the bi-encoder embedding of the query vs. each chunk gives a meaningful
-  re-rank signal when the original vector search has already narrowed
-  the candidate set to ~3-8 results.
-- Returns the same ChromaDB result dict structure so callers need no changes
-  beyond calling rerank_results() before generate_answer().
+WHY THIS CHANGED
+----------------
+The old reranker re-scored candidates with the SAME bi-encoder
+(all-MiniLM-L6-v2) that produced the original ranking — it mostly
+re-derived the same cosine order, adding latency for ~no signal, and it
+wasn't even imported into agentic_rag.py.
+
+A cross-encoder reads the (query, chunk) PAIR jointly and scores
+relevance directly. This is what actually moves precision (benchmarks
+report up to ~28% nDCG@10 gains). cross-encoder/ms-marco-MiniLM-L-6-v2
+is ~80MB — fine for HuggingFace Spaces.
+
+Use this as the FINAL stage: fuse (dense+BM25) -> rerank -> top_k.
 """
 
-from sentence_transformers import SentenceTransformer, util
-import numpy as np
+from sentence_transformers import CrossEncoder
 
-# ============================================================
-# LOAD EMBEDDING MODEL (singleton pattern — import once)
-# ============================================================
-
-_rerank_model = None
+_MODEL_NAME = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+_model = None
 
 
 def _get_model():
-    global _rerank_model
-    if _rerank_model is None:
-        _rerank_model = SentenceTransformer("all-MiniLM-L6-v2")
-    return _rerank_model
+    global _model
+    if _model is None:
+        _model = CrossEncoder(_MODEL_NAME)
+    return _model
 
 
-# ============================================================
-# RERANK
-# ============================================================
-
-def rerank_results(question: str, results: dict) -> dict:
+def rerank_results(question: str, results: dict, top_k: int = None) -> dict:
     """
-    Rerank ChromaDB query results by cosine similarity
-    between the query embedding and each chunk embedding.
+    Rerank a Chroma-style result dict with a cross-encoder.
 
     Args:
-        question: The user's original question string.
-        results:  ChromaDB query() result dict with keys:
-                  ids, documents, metadatas, distances
-                  (all wrapped in a single-element outer list).
+        question: user query.
+        results:  Chroma-style dict (ids/documents/metadatas/distances).
+        top_k:    if set, truncate to this many after reranking.
 
     Returns:
-        A new results dict with the same structure,
-        sorted descending by rerank similarity score.
+        New Chroma-style dict ordered by cross-encoder score (desc).
+        `distances` = 1 - sigmoid-ish normalized score (smaller better).
     """
-
     if not results or not results.get("ids") or not results["ids"][0]:
         return results
-
-    model = _get_model()
 
     documents = results["documents"][0]
     ids = results["ids"][0]
     metadatas = results["metadatas"][0]
-    distances = results["distances"][0]
 
-    n = len(documents)
+    model = _get_model()
+    # Truncate very long table chunks for the cross-encoder input window.
+    pairs = [[question, doc[:2000]] for doc in documents]
+    scores = model.predict(pairs).tolist()
 
-    # --------------------------------------------------------
-    # Encode query once + encode all chunk texts
-    # --------------------------------------------------------
+    order = sorted(range(len(scores)), key=lambda i: scores[i],
+                   reverse=True)
+    if top_k:
+        order = order[:top_k]
 
-    query_embedding = model.encode(question, convert_to_tensor=True)
+    # Min-max normalize scores to pseudo-distances in [0,1].
+    s_min = min(scores)
+    s_max = max(scores)
+    rng = (s_max - s_min) or 1.0
 
-    # Truncate chunks to 512 tokens to stay within model limits
-    truncated_docs = [doc[:2000] for doc in documents]
-    chunk_embeddings = model.encode(truncated_docs, convert_to_tensor=True)
-
-    # --------------------------------------------------------
-    # Compute cosine similarities
-    # --------------------------------------------------------
-
-    similarities = util.cos_sim(query_embedding, chunk_embeddings)[0]  # shape: (n,)
-    similarity_scores = similarities.cpu().numpy().tolist()
-
-    # --------------------------------------------------------
-    # Sort indices by descending similarity
-    # --------------------------------------------------------
-
-    sorted_indices = np.argsort(similarity_scores)[::-1].tolist()
-
-    # --------------------------------------------------------
-    # Rebuild result dict in sorted order
-    # --------------------------------------------------------
-
-    reranked = {
-        "ids": [[ids[i] for i in sorted_indices]],
-        "documents": [[documents[i] for i in sorted_indices]],
-        "metadatas": [[metadatas[i] for i in sorted_indices]],
-        # Replace original distances with rerank-derived distances (1 - sim)
-        "distances": [[1.0 - similarity_scores[i] for i in sorted_indices]],
+    out = {
+        "ids": [[ids[i] for i in order]],
+        "documents": [[documents[i] for i in order]],
+        "metadatas": [[metadatas[i] for i in order]],
+        "distances": [[1.0 - ((scores[i] - s_min) / rng) for i in order]],
     }
 
-    print("\nReranking Results:")
-    for rank, i in enumerate(sorted_indices):
-        meta = metadatas[i]
-        print(
-            f"  Rank {rank+1}: "
-            f"{meta['company']} | "
-            f"Year: {meta['year']} | "
-            f"{meta['section']} | "
-            f"Rerank Sim: {similarity_scores[i]:.4f}"
-        )
+    print("\nReranking (cross-encoder):")
+    for rank, i in enumerate(order):
+        m = metadatas[i]
+        print(f"  Rank {rank+1}: {m['company']} | {m['year']} | "
+              f"{m['section']} | ce_score={scores[i]:.3f}")
 
-    return reranked
+    return out
 
-
-# ============================================================
-# TESTS
-# ============================================================
 
 if __name__ == "__main__":
-
-    # Minimal smoke test — does not require ChromaDB
-    fake_results = {
+    fake = {
         "ids": [["id1", "id2", "id3"]],
-        "documents": [
-            [
-                "Apple faces significant competition in all its markets.",
-                "Tesla's revenue for FY2024 was approximately 97.7 billion dollars.",
-                "Risk factors include supply chain disruptions and geopolitical instability.",
-            ]
-        ],
-        "metadatas": [
-            [
-                {"company": "AAPL", "year": 2024, "section": "Business"},
-                {"company": "TSLA", "year": 2024, "section": "Financial Statements"},
-                {"company": "AAPL", "year": 2024, "section": "Risk Factors"},
-            ]
-        ],
+        "documents": [[
+            "Apple faces significant competition in all its markets.",
+            "Tesla FY2024 revenue was approximately 97.7 billion dollars.",
+            "Risk factors include supply chain and geopolitical instability.",
+        ]],
+        "metadatas": [[
+            {"company": "AAPL", "year": 2024, "section": "Business"},
+            {"company": "TSLA", "year": 2024, "section": "Financial Statements"},
+            {"company": "AAPL", "year": 2024, "section": "Risk Factors"},
+        ]],
         "distances": [[0.42, 0.38, 0.31]],
     }
-
-    question = "What are Apple's major risk factors?"
-    reranked = rerank_results(question, fake_results)
-
+    out = rerank_results("What are Apple's major risk factors?", fake)
     print("\nReranked order:")
-    for i, doc in enumerate(reranked["documents"][0]):
-        print(f"  {i+1}. {doc[:80]}...")
+    for d in out["documents"][0]:
+        print(" -", d[:70])
