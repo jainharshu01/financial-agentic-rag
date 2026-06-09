@@ -1,20 +1,44 @@
 """
-src/ingestion/xbrl_facts.py   (UPDATED — adds gross_margin derived ratio)
+src/ingestion/xbrl_facts.py   (ROBUST extraction — fixes missing-year gaps)
 
 Fetch EXACT financial numbers from the SEC's free XBRL companyfacts API.
 
-WHAT'S NEW vs the first version
--------------------------------
-- Adds a DERIVED concept "gross_margin" = GrossProfit / Revenue, computed
-  per fiscal year, so questions like "Apple's gross margin in 2024" can be
-  answered exactly instead of returning "insufficient evidence".
-- format_value now handles percentages for *_margin concepts.
+WHY THIS VERSION
+----------------
+The evaluation showed Microsoft / Tesla / Alphabet FY2024 revenue were NOT
+being injected as XBRL facts, so the weak generator fell back to tables and
+picked the wrong row (e.g. Tesla "deferred revenue" instead of total
+revenue). Two bugs in the old extractor caused the gaps:
+
+1. FIRST-TAG-WINS. extract_annual returned as soon as ONE candidate GAAP
+   tag had any data. If a company's primary tag (e.g.
+   RevenueFromContractWithCustomerExcludingAssessedTax) only covered older
+   years, the fuller `Revenues` tag was never consulted. -> Now MERGES all
+   candidate tags into one {year: value} map.
+
+2. YEAR FROM THE `fy` FIELD. The companyfacts `fy` field is the fiscal year
+   of the REPORT an entry appeared in, not necessarily the period the value
+   covers, and it collides across the 3 comparative years in a 10-K. -> Now
+   derives the fiscal year from the period END DATE (int(end[:4])), which is
+   correct for all five companies (Apple FY ends Sep, MSFT Jun, the rest
+   Dec). Annual flow items also require a ~year-long period so quarterly
+   facts can't leak in.
+
+IMPORTANT — YOU MUST REBUILD THE LOOKUP
+---------------------------------------
+This only changes how facts are EXTRACTED. The query-time lookup file
+(data/xbrl/facts_lookup.json) is unchanged until you regenerate it:
+
+    python -m src.ingestion.xbrl_facts
+
+That step needs internet (SEC API). After it runs, re-run the evaluation.
+
+SEGMENT METRICS (AWS / automotive / cloud) are NOT in these top-level
+concepts — they live behind XBRL dimensional members and are out of scope
+here; those numbers now rely on the table-boosted retrieval path instead.
 
 Endpoint: https://data.sec.gov/api/xbrl/companyfacts/CIK##########.json
 - Free, no key. 10 req/s. MANDATORY descriptive User-Agent w/ contact email.
-
-Fetch ONCE at ingestion -> data/xbrl/<TICKER>.json + facts_lookup.json.
-Query time NEVER calls the API.
 """
 
 import os
@@ -25,7 +49,7 @@ import requests
 
 SEC_USER_AGENT = os.getenv(
     "SEC_USER_AGENT",
-    "Financial-Agentic-RAG harshitasaraogi01@gmail.com",
+    "Financial-Agentic-RAG contact@example.com",
 )
 
 COMPANY_CIK = {
@@ -36,7 +60,7 @@ COMPANY_CIK = {
     "TSLA": "0001318605",
 }
 
-# Direct GAAP concepts (first matching tag wins).
+# Direct GAAP concepts. All listed tags are now MERGED (not first-wins).
 CONCEPTS = {
     "revenue": [
         "RevenueFromContractWithCustomerExcludingAssessedTax",
@@ -66,24 +90,59 @@ def fetch_companyfacts(cik: str) -> dict:
     return resp.json()
 
 
+def _year_from_end(end: str):
+    """Fiscal year ~= calendar year of the period end date."""
+    try:
+        return int(str(end)[:4])
+    except (ValueError, TypeError):
+        return None
+
+
+def _is_annual_period(start, end) -> bool:
+    """
+    For flow items (revenue, income, cash flow) the entry must span ~a year
+    so quarterly facts don't leak in. Instant items (assets/liabilities,
+    EPS) have no `start` and pass through.
+    """
+    if not start:
+        return True
+    try:
+        from datetime import date
+        s = date.fromisoformat(str(start))
+        e = date.fromisoformat(str(end))
+        return (e - s).days >= 300
+    except Exception:
+        return True
+
+
 def extract_annual(facts: dict, gaap_tags: list) -> dict:
-    """Return {fiscal_year: value} for the first GAAP tag that exists."""
+    """
+    Return {fiscal_year: value} MERGED across every candidate GAAP tag,
+    using 10-K annual entries keyed by the period end-date year. When the
+    same year appears more than once, the most recently FILED value wins.
+    """
     usgaap = facts.get("facts", {}).get("us-gaap", {})
+    best = {}  # year -> (filed_date_str, value)
+
     for tag in gaap_tags:
         if tag not in usgaap:
             continue
         units = usgaap[tag].get("units", {})
         for _unit, entries in units.items():
-            out = {}
             for e in entries:
-                if e.get("form") == "10-K" and e.get("fp") == "FY":
-                    fy = e.get("fy")
-                    val = e.get("val")
-                    if fy is not None and val is not None:
-                        out[int(fy)] = val
-            if out:
-                return out
-    return {}
+                if e.get("form") != "10-K":
+                    continue
+                if not _is_annual_period(e.get("start"), e.get("end")):
+                    continue
+                fy = _year_from_end(e.get("end"))
+                val = e.get("val")
+                if fy is None or val is None:
+                    continue
+                filed = e.get("filed", "")
+                if fy not in best or filed >= best[fy][0]:
+                    best[fy] = (filed, val)
+
+    return {yr: v for yr, (f, v) in best.items()}
 
 
 def build_lookup():
@@ -102,13 +161,13 @@ def build_lookup():
                   encoding="utf-8") as f:
             json.dump(facts, f)
 
-        # Direct concepts
         per_concept_annual = {}
         for concept, tags in CONCEPTS.items():
             annual = extract_annual(facts, tags)
             per_concept_annual[concept] = annual
             for fy, val in annual.items():
                 lookup[f"{ticker}|{concept}|{fy}"] = val
+            print(f"  {concept:18s}: years {sorted(annual)}")
 
         # DERIVED: gross_margin = gross_profit / revenue (per year)
         gp = per_concept_annual.get("gross_profit", {})
@@ -168,7 +227,6 @@ def format_value(concept: str, value) -> str:
 if __name__ == "__main__":
     build_lookup()
     print("\nSmoke test:")
-    print("AAPL revenue 2024:",
-          format_value("revenue", get_fact("AAPL", "revenue", 2024)))
-    print("AAPL gross_margin 2024:",
-          format_value("gross_margin", get_fact("AAPL", "gross_margin", 2024)))
+    for t in ("AAPL", "MSFT", "TSLA", "GOOGL", "AMZN"):
+        print(f"{t} revenue 2024:",
+              format_value("revenue", get_fact(t, "revenue", 2024)))

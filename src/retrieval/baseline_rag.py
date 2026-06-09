@@ -1,15 +1,26 @@
 """
-src/retrieval/baseline_rag.py   (REPLACES the old version)
+src/retrieval/baseline_rag.py   (generation fixes only — architecture intact)
 
-Baseline static RAG. Kept deliberately simple as the comparison point.
+Baseline static RAG. Still deliberately simple: single dense query, no
+routing, no BM25/fusion, no rerank, no XBRL, no retry. That is the whole
+point of the comparison.
 
-ONLY CHANGES vs old version:
-- Embedding model -> BAAI/bge-small-en-v1.5 (matches the new vectorstore).
-- bge wants a short instruction prefix on the QUERY (not documents):
-  "Represent this sentence for searching relevant passages:".
-- normalize_embeddings=True (cosine space).
-Everything else (filters, auto-detect, generation) is unchanged so the
-baseline-vs-agentic comparison stays fair.
+WHY THESE CHANGES (and why they keep the comparison FAIR)
+---------------------------------------------------------
+A research comparison should isolate ONE variable: the agentic pipeline.
+Previously the baseline AND the agentic pipeline both generated with
+`llama-3.1-8b-instant`, but the project write-up assumed 70B — and the 8B
+model's table-reading weakness was being attributed to "the baseline being
+worse" rather than to the model. To make the measured Baseline-vs-Agentic
+delta reflect the PIPELINE (retrieval/routing/rerank/XBRL/retry) and not
+the generator, the baseline now uses the SAME generation model and the
+SAME answer prompt as the agentic pipeline. Everything that defines the
+baseline as "static RAG" (the retrieval) is unchanged.
+
+CHANGES:
+- Generation model -> llama-3.3-70b-versatile (was 8b-instant).
+- Per-chunk char budget -> 1500 for tables / 900 for text (was flat 600).
+- Prompt -> same extract-the-number prompt as agentic (minus XBRL lines).
 """
 
 import os
@@ -25,6 +36,10 @@ load_dotenv()
 
 EMBED_MODEL_NAME = "BAAI/bge-small-en-v1.5"
 QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
+
+GENERATION_MODEL = "llama-3.3-70b-versatile"
+TABLE_CHAR_BUDGET = 1500
+TEXT_CHAR_BUDGET = 900
 
 embedding_model = SentenceTransformer(EMBED_MODEL_NAME)
 client = chromadb.PersistentClient(path="data/vectorstore")
@@ -74,24 +89,39 @@ def retrieve_chunks(question, company=None, year=None, section=None, top_k=5):
 def generate_answer(question, results):
     context_parts = []
     for i in range(len(results["ids"][0])):
-        doc = results["documents"][0][i][:600]
         meta = results["metadatas"][0][i]
+        is_table = meta.get("content_type") == "table"
+        budget = TABLE_CHAR_BUDGET if is_table else TEXT_CHAR_BUDGET
+        doc = results["documents"][0][i][:budget]
         context_parts.append(
             f"[Source {i+1}] Company: {meta['company']} | "
             f"Year: {meta['year']} | Section: {meta['section']} \n\n{doc}"
         )
     context = "\n\n---\n\n".join(context_parts)
 
-    prompt = f"""You are a financial document analyst.
+    prompt = f"""You are a financial document analyst answering questions about SEC 10-K filings.
 
-Answer the user's question using ONLY the provided SEC filing context.
+Use ONLY the provided context below. Do NOT use outside knowledge.
+
+HOW TO READ THE CONTEXT:
+- Blocks wrapped in [TABLE] ... [/TABLE] are financial statement tables.
+  When the answer is a number, look inside these tables and EXTRACT the
+  matching row/value. Do not ignore tables in favour of prose.
+
+VOCABULARY (treat these as the SAME line item):
+- "revenue" = "net sales" = "total net sales" = "total revenues" = "total revenue"
+- "net income" = "net earnings" = "profit (for the year)"
+- "operating income" = "operating profit" = "income from operations"
 
 RULES:
-1. Do NOT use outside knowledge.
-2. Cite sources using (Source X) format — always include the parentheses.
-3. For cross-company comparisons, mention EACH company and cite sources from each.
-4. Include specific numbers when relevant.
-5. If evidence is insufficient, say: "Insufficient evidence in the provided documents."
+1. Cite every source you use as (Source X) — always include the parentheses.
+2. For cross-company comparisons, state EACH company's figure and cite a
+   source for each.
+3. Give the specific number (with units) whenever the question asks for one
+   and the number is present in any source.
+4. Only answer "Insufficient evidence in the provided documents." if the
+   requested fact is genuinely absent from EVERY source above — never as a
+   hedge when a relevant number is present in a [TABLE].
 
 Context:
 {context}
@@ -102,7 +132,7 @@ Question:
 Answer:"""
 
     response = groq_client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model=GENERATION_MODEL,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.2,
     )

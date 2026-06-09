@@ -5,6 +5,25 @@ Streamlit evaluation dashboard.
 
 Run:
     streamlit run evaluation/dashboard.py
+
+WHAT'S NEW (additive — all original charts kept)
+------------------------------------------------
+The dashboard previously visualised only the boolean columns in
+results.csv (citation/section/similarity). It now also surfaces the three
+advanced evaluators that already existed in the repo but were never shown:
+
+1. TRUE NUMERIC ACCURACY (numeric_grader.matches): for numeric/comparative
+   questions with a numeric gold, checks whether the generated answer
+   actually contains the right figure within tolerance — not merely whether
+   *some* number is present.
+2. LLM-AS-JUDGE (results_judged.csv -> judge_score): average semantic score
+   and a score distribution for prose (risk/descriptive) answers. The
+   dashboard auto-loads results_judged.csv if present, else results.csv.
+3. SYNONYM-NORMALIZED GOLD OVERLAP (metrics_synonym_patch.gold_overlap_metric):
+   token recall of gold terms after collapsing financial synonyms.
+
+Each advanced block is wrapped in try/except so the dashboard still loads if
+a module/file is missing.
 """
 
 import sys
@@ -21,6 +40,7 @@ from evaluation.metrics import load_results, compute_all_metrics
 
 EVAL_DIR = Path(__file__).resolve().parent
 RESULTS_CSV = EVAL_DIR / "results.csv"
+JUDGED_CSV = EVAL_DIR / "results_judged.csv"
 
 # ============================================================
 # PAGE CONFIG
@@ -158,16 +178,18 @@ def styled_bar(df, x, y, color, color_map, text_auto=".1f", **kwargs):
 
 
 # ============================================================
-# LOAD DATA
+# LOAD DATA — prefer the judged CSV (adds judge_score) if present
 # ============================================================
 
 @st.cache_data
 def load_data():
-    if not RESULTS_CSV.exists():
-        return None
-    return load_results(RESULTS_CSV)
+    if JUDGED_CSV.exists():
+        return load_results(JUDGED_CSV), True
+    if RESULTS_CSV.exists():
+        return load_results(RESULTS_CSV), False
+    return None, False
 
-df = load_data()
+df, judged_loaded = load_data()
 
 if df is None:
     st.error(f"No results at `{RESULTS_CSV}`. Run `python -m evaluation.run_evaluation` first.")
@@ -196,6 +218,12 @@ with st.sidebar:
     sel_pipes = st.multiselect("Pipeline", pipelines, default=pipelines)
     atypes = df["answer_type"].unique().tolist()
     sel_types = st.multiselect("Answer Type", atypes, default=atypes)
+    st.markdown("---")
+    st.caption(
+        "Source: " + ("results_judged.csv (with LLM-judge scores)"
+                      if judged_loaded else "results.csv "
+                      "(run `python -m evaluation.llm_judge` to add judge scores)")
+    )
 
 fdf = df[df["pipeline"].isin(sel_pipes) & df["answer_type"].isin(sel_types)]
 
@@ -324,6 +352,101 @@ with q2:
 st.markdown("---")
 
 # ============================================================
+# SEMANTIC & NUMERIC EVALUATION  (advanced — newly integrated)
+# ============================================================
+
+st.markdown("<div class='section-label'>Semantic &amp; Numeric Evaluation</div>",
+            unsafe_allow_html=True)
+
+# --- 1. True numeric accuracy (numeric_grader.matches) -----------------
+try:
+    from evaluation.numeric_grader import matches as numeric_matches
+    from evaluation.numeric_grader import extract_values, TOLERANCE
+
+    num_rows = fdf[fdf["answer_type"].isin(["numeric", "comparative"])]
+    num_stats = {}
+    for pipe, group in num_rows.groupby("pipeline"):
+        correct = total = 0
+        for _, r in group.iterrows():
+            gold = str(r.get("gold_answer", ""))
+            if not extract_values(gold):
+                continue  # gold has no number -> graded by the judge instead
+            total += 1
+            correct += int(numeric_matches(gold, str(r.get("generated_answer", ""))))
+        if total:
+            num_stats[pipe] = dict(acc=correct / total * 100, correct=correct, total=total)
+
+    na1, na2 = st.columns(2)
+    with na1:
+        st.markdown(f"**True Numeric Accuracy** (±{int(TOLERANCE*100)}% tolerance)")
+        if num_stats:
+            ndf = pd.DataFrame([
+                {"pipeline": p, "accuracy": s["acc"]} for p, s in num_stats.items()
+            ])
+            fign = styled_bar(ndf, "pipeline", "accuracy", "pipeline", cmap,
+                              labels={"accuracy": "Correct figure (%)", "pipeline": ""})
+            st.plotly_chart(fign, use_container_width=True)
+            st.caption("  ·  ".join(
+                f"{p}: {s['correct']}/{s['total']}" for p, s in num_stats.items()
+            ) + ". Counts only questions whose gold answer contains a figure; the "
+                "answer must contain that figure within tolerance — not merely *a* number.")
+        else:
+            st.info("No numeric/comparative questions with numeric gold in selection.")
+
+    # --- 2. Synonym-normalized gold overlap ----------------------------
+    with na2:
+        st.markdown("**Synonym-Normalized Gold Overlap**")
+        try:
+            from evaluation.metrics_synonym_patch import gold_overlap_metric
+            ov = gold_overlap_metric(fdf)["per_pipeline"]
+            odf = pd.DataFrame([
+                {"pipeline": p, "overlap": v * 100} for p, v in ov.items()
+            ])
+            figo = styled_bar(odf, "pipeline", "overlap", "pipeline", cmap,
+                              labels={"overlap": "Token recall (%)", "pipeline": ""})
+            st.plotly_chart(figo, use_container_width=True)
+            st.caption("Recall of gold-answer terms after collapsing financial "
+                       "synonyms (revenue = net sales = total revenues, etc.).")
+        except Exception as e:
+            st.warning(f"Synonym overlap unavailable: {e}")
+except Exception as e:
+    st.warning(f"Numeric grading unavailable: {e}")
+
+# --- 3. LLM-as-judge (prose answers) -----------------------------------
+if judged_loaded and "judge_score" in df.columns:
+    jdf = fdf.copy()
+    jdf["judge_score"] = pd.to_numeric(jdf["judge_score"], errors="coerce")
+    jdf = jdf.dropna(subset=["judge_score"])
+
+    if not jdf.empty:
+        j1, j2 = st.columns(2)
+        with j1:
+            st.markdown("**LLM Judge — Average Score** (risk + descriptive)")
+            javg = jdf.groupby("pipeline")["judge_score"].mean().reset_index()
+            javg["judge_score"] = javg["judge_score"].round(3)
+            figj = styled_bar(javg, "pipeline", "judge_score", "pipeline", cmap,
+                              text_auto=".2f",
+                              labels={"judge_score": "Avg score (0–1)", "pipeline": ""})
+            figj.update_yaxes(range=[0, 1])
+            st.plotly_chart(figj, use_container_width=True)
+        with j2:
+            st.markdown("**LLM Judge — Score Distribution**")
+            figd = px.histogram(jdf, x="judge_score", color="pipeline",
+                                nbins=11, barmode="overlay", opacity=0.7,
+                                color_discrete_map=cmap, range_x=[0, 1],
+                                labels={"judge_score": "Judge score (0–1)"})
+            figd.update_layout(**PLOTLY_LAYOUT, height=330,
+                               legend=dict(orientation="h", y=1.12, x=0.5, xanchor="center"))
+            st.plotly_chart(figd, use_container_width=True)
+    else:
+        st.info("No judge scores in the current selection.")
+else:
+    st.info("LLM-judge scores not loaded. Run `python -m evaluation.llm_judge` "
+            "to generate results_judged.csv, then reload.")
+
+st.markdown("---")
+
+# ============================================================
 # DATA TABLE
 # ============================================================
 
@@ -332,7 +455,7 @@ st.markdown("<div class='section-label'>Detailed Results</div>", unsafe_allow_ht
 show_cols = [c for c in [
     "pipeline", "question", "company", "year", "answer_type",
     "response_time_sec", "avg_similarity", "top_similarity",
-    "section_accuracy", "citations_present", "retry_used",
+    "section_accuracy", "citations_present", "retry_used", "judge_score",
 ] if c in fdf.columns]
 
 st.dataframe(fdf[show_cols].reset_index(drop=True), use_container_width=True, height=380)
@@ -359,6 +482,9 @@ if sel_q:
             st.markdown(f"**Gold:** {row.get('gold_answer', 'N/A')}")
             st.markdown(f"**Generated:**")
             st.write(row.get("generated_answer", "N/A"))
+            if row.get("judge_score") not in (None, "", float("nan")):
+                jr = row.get("judge_reason", "")
+                st.markdown(f"**Judge:** {row.get('judge_score')}  —  {jr}")
             mc = st.columns(6)
             mc[0].metric("Sec. Acc.", "✓" if row.get("section_accuracy") else "✗")
             mc[1].metric("Citations", "✓" if row.get("citations_present") else "✗")

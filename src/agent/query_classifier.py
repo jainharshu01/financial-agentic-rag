@@ -4,12 +4,19 @@ import re
 def classify_query(question):
     """
     Rule-based query classifier.
+
+    CHANGE: added a "properties" type. Previously a question like
+    "What properties does Apple own?" matched no keyword and fell through
+    to "descriptive", which routes to Business/MD&A — so the Properties
+    (Item 2) section was never retrievable. Cybersecurity questions still
+    classify as "risk"; the router now sends them to the dedicated
+    Cybersecurity (Item 1C) section with a Risk Factors fallback.
     """
 
     q = question.lower()
 
     # ========================================================
-    # COMPARATIVE QUESTIONS
+    # COMPARATIVE QUESTIONS  (checked first)
     # ========================================================
 
     comparative_keywords = [
@@ -45,7 +52,7 @@ def classify_query(question):
         return "numeric"
 
     # ========================================================
-    # RISK QUESTIONS
+    # RISK QUESTIONS  (includes cybersecurity; router splits it)
     # ========================================================
 
     risk_keywords = [
@@ -54,7 +61,8 @@ def classify_query(question):
         "uncertainty",
         "threat",
         "challenge",
-        "cybersecurity"
+        "cybersecurity",
+        "cyber"
     ]
 
     if any(word in q for word in risk_keywords):
@@ -75,6 +83,26 @@ def classify_query(question):
         return "summary"
 
     # ========================================================
+    # PROPERTIES QUESTIONS  (NEW — Item 2)
+    # ========================================================
+
+    properties_keywords = [
+        "properties",
+        "property",
+        "real estate",
+        "headquarters",
+        "office space",
+        "manufacturing facilities",
+        "leased",
+        "owned premises",
+        "data centers",
+        "data centres",
+    ]
+
+    if any(word in q for word in properties_keywords):
+        return "properties"
+
+    # ========================================================
     # DEFAULT
     # ========================================================
 
@@ -88,21 +116,16 @@ def classify_query(question):
 if __name__ == "__main__":
 
     test_questions = [
-
         "What were Apple's risk factors?",
-
         "What was Tesla's revenue in 2024?",
-
         "Compare Microsoft's risks between 2023 and 2024",
-
         "Summarize Amazon's business outlook",
-
-        "What challenges did Google mention?"
+        "What challenges did Google mention?",
+        "What properties does Apple own or lease?",
+        "Describe Microsoft's cybersecurity governance",
     ]
 
     for q in test_questions:
-
         result = classify_query(q)
-
         print(f"\nQuestion: {q}")
         print(f"Classified as: {result}")

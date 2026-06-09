@@ -3,9 +3,15 @@ src/agent/router.py
 
 Builds dynamic retrieval strategies based on query type.
 
-Updates:
-- Descriptive queries now allow Business OR MD&A jointly (via sections_allowed)
-- All other behaviors preserved from previous version
+Updates in this version (additive, nothing removed):
+- NEW "properties" query_type -> Properties (Item 2) section, with a
+  Business fallback so a thin Properties section never returns empty.
+- Cybersecurity risk queries now target the dedicated Cybersecurity
+  (Item 1C) section, with a Risk Factors fallback. Other risk queries
+  keep the tight Risk Factors filter exactly as before.
+- Descriptive queries still allow Business OR MD&A jointly.
+- Numeric routing (Financial Statements) is unchanged; the agentic
+  pipeline now boosts table chunks within that section at rerank time.
 """
 
 from src.agent.query_classifier import classify_query
@@ -24,6 +30,7 @@ def build_retrieval_strategy(question):
     """
 
     query_type = classify_query(question)
+    q = question.lower()
 
     strategy = {
         "query_type": query_type,
@@ -34,15 +41,22 @@ def build_retrieval_strategy(question):
     }
 
     # ========================================================
-    # RISK QUESTIONS — Tight section filter
+    # RISK QUESTIONS — Risk Factors, with a Cybersecurity split
     # ========================================================
 
     if query_type == "risk":
-        strategy["section"] = "Risk Factors"
-        strategy["top_k"] = 4
+        if "cyber" in q:
+            # Cybersecurity disclosures live in Item 1C, but some companies
+            # still discuss cyber risk under Risk Factors — allow both.
+            strategy["section"] = None
+            strategy["sections_allowed"] = ["Cybersecurity", "Risk Factors"]
+            strategy["top_k"] = 4
+        else:
+            strategy["section"] = "Risk Factors"
+            strategy["top_k"] = 4
 
     # ========================================================
-    # NUMERIC QUESTIONS — Tight section filter
+    # NUMERIC QUESTIONS — Financial Statements (tables boosted at rerank)
     # ========================================================
 
     elif query_type == "numeric":
@@ -58,11 +72,19 @@ def build_retrieval_strategy(question):
         strategy["top_k"] = 4
 
     # ========================================================
+    # PROPERTIES QUESTIONS (NEW) — Item 2, with Business fallback
+    # ========================================================
+
+    elif query_type == "properties":
+        strategy["section"] = None
+        strategy["sections_allowed"] = ["Properties", "Business"]
+        strategy["top_k"] = 4
+
+    # ========================================================
     # DESCRIPTIVE QUESTIONS — Allow Business OR MD&A jointly
     # ========================================================
 
     elif query_type == "descriptive":
-        # Allow embedding model to pick whichever section is most relevant
         strategy["section"] = None
         strategy["sections_allowed"] = ["Business", "MD&A"]
         strategy["top_k"] = 5
@@ -76,15 +98,21 @@ def build_retrieval_strategy(question):
         strategy["use_comparison"] = True
         strategy["top_k"] = 6
 
-        q = question.lower()
+        # Comparative cybersecurity
+        if "cyber" in q:
+            strategy["sections_allowed"] = ["Cybersecurity", "Risk Factors"]
 
         # Comparative risk queries
-        if any(word in q for word in ["risk", "risks", "challenge", "threat"]):
+        elif any(word in q for word in ["risk", "risks", "challenge", "threat"]):
             strategy["section"] = "Risk Factors"
 
         # Comparative financial queries
         elif any(word in q for word in ["revenue", "income", "profit", "sales", "earnings"]):
             strategy["section"] = "Financial Statements"
+
+        # Comparative properties queries
+        elif any(word in q for word in ["properties", "property", "facilities", "headquarters"]):
+            strategy["sections_allowed"] = ["Properties", "Business"]
 
         # Comparative summary/outlook queries
         elif any(word in q for word in ["outlook", "summary", "overview"]):
@@ -109,7 +137,9 @@ if __name__ == "__main__":
         "Compare Microsoft's risks between 2023 and 2024",
         "Summarize Amazon's outlook",
         "Describe Google's cloud business strategy",
-        "Compare Apple's business strategy across 2023 and 2024"
+        "Compare Apple's business strategy across 2023 and 2024",
+        "What properties does Apple own or lease?",
+        "Describe Microsoft's cybersecurity risk governance",
     ]
 
     for q in questions:

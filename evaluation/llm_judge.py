@@ -1,26 +1,39 @@
 """
-evaluation/llm_judge.py   (NEW)
+evaluation/llm_judge.py
 
 LLM-as-judge for prose answers (risk + descriptive questions).
 
 WHY
 ---
-Numeric questions are graded objectively by numeric_grader.py. But the
-18 risk/descriptive questions have prose gold answers like:
-    "Apple faces risks including global competition, supply chain
-    concentration in China, intellectual property litigation, ..."
-There's no single number to match. We need a model to judge whether the
-generated answer covers the gold's key points.
+Numeric questions are graded objectively by numeric_grader.py (no API). The
+18 risk/descriptive questions have prose gold answers with no single number
+to match, so a model judges whether the generated answer covers the gold's
+key points.
+
+MODEL & WHEN TO RUN
+-------------------
+The judge runs on `llama-3.3-70b-versatile` for the most reliable judging.
+Because that is the SAME 70B model that GENERATES answers, the judge shares
+generation's daily Groq token quota. So this is a STANDALONE step — run it
+on its own, ideally on a day with fresh quota, AFTER run_evaluation.py has
+produced results.csv:
+
+    python -m evaluation.llm_judge        # reads results.csv -> results_judged.csv
+
+run_evaluation.py does NOT call this automatically (by design). The
+dashboard auto-loads results_judged.csv once it exists, so the judge charts
+appear after you run this.
 
 DESIGN
 ------
-- Uses your existing Groq client (no new API key, no new dependency).
-- Asks the LLM to score 0.0-1.0 on coverage of the gold's key points,
-  plus a one-line justification.
-- Skips numeric/comparative rows (those go through numeric_grader.py).
+- Uses your existing Groq client (no new key, no new dependency).
+- Scores 0.0-1.0 on coverage of the gold's key points + a one-line reason.
+- Skips numeric/comparative rows (graded by numeric_grader.py).
 - Reads results.csv, writes results_judged.csv with two new columns:
   judge_score and judge_reason.
-- Polite: 0.7s sleep between calls so we don't hammer the API.
+- SLEEP_BETWEEN_CALLS gives per-minute-rate headroom; if you still hit 429s,
+  raise it (e.g. 2.0). The per-DAY token cap is a hard wall — if you hit it,
+  resume on another day; already-written rows are preserved on disk.
 
 USAGE
 -----
@@ -28,9 +41,9 @@ USAGE
 
 WHEN TO TRUST IT
 ----------------
-The judge is a model, not ground truth. Treat scores >= 0.7 as "covers
-the key points", < 0.4 as "misses". Always spot-check 3-5 rows yourself
-the first time, to verify the judge matches your intuition.
+The judge is a model, not ground truth. Treat scores >= 0.7 as "covers the
+key points", < 0.4 as "misses". Spot-check 3-5 rows the first time to verify
+the judge matches your intuition.
 """
 
 import csv
@@ -50,8 +63,8 @@ RESULTS_CSV = EVAL_DIR / "results.csv"
 OUT_CSV = EVAL_DIR / "results_judged.csv"
 
 groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
-MODEL = "llama-3.3-70b-versatile"
-SLEEP_BETWEEN_CALLS = 0.7  # seconds
+MODEL = "llama-3.3-70b-versatile"   # most reliable judging (shares 70B quota)
+SLEEP_BETWEEN_CALLS = 1.0  # seconds; raise to ~2.0 if you hit per-minute 429s
 
 
 JUDGE_PROMPT = """You are an impartial evaluator scoring how well a
@@ -127,7 +140,8 @@ def run():
     total = sum(
         1 for r in rows if r["answer_type"] in ("risk", "descriptive")
     )
-    print(f"Judging {total} prose answers (risk + descriptive) ...\n")
+    print(f"Judging {total} prose answers (risk + descriptive) "
+          f"with {MODEL} ...\n")
 
     judged = []
     done = 0
