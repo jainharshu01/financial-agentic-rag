@@ -38,9 +38,11 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from evaluation.metrics import load_results, compute_all_metrics
 
-EVAL_DIR = Path(__file__).resolve().parent
-RESULTS_CSV = EVAL_DIR / "results.csv"
-JUDGED_CSV = EVAL_DIR / "results_judged.csv"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+RESULTS_CSV = PROJECT_ROOT / "evaluation" / "results.csv"
+
+RESULTS_JUDGED_CSV = PROJECT_ROOT / "evaluation" / "results_judged.csv"
 
 # ============================================================
 # PAGE CONFIG

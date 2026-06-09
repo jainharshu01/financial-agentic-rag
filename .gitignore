@@ -22,8 +22,7 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
-# Evaluation artifacts (keep results.csv but exclude experimental outputs)
-evaluation/results_judged.csv
+# Evaluation artifacts 
 evaluation/*.bak
 
-hf-space/
+hf-deploy/
