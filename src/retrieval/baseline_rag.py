@@ -37,7 +37,7 @@ load_dotenv()
 EMBED_MODEL_NAME = "BAAI/bge-small-en-v1.5"
 QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 
-GENERATION_MODEL = "llama-3.3-70b-versatile"
+GENERATION_MODEL = "openai/gpt-oss-120b"
 TABLE_CHAR_BUDGET = 1500
 TEXT_CHAR_BUDGET = 900
 

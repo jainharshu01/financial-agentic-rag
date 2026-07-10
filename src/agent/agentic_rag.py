@@ -73,7 +73,7 @@ EMBED_MODEL_NAME = "BAAI/bge-small-en-v1.5"
 QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 
 # Generation model. Was llama-3.1-8b-instant (too weak for table reading).
-GENERATION_MODEL = "llama-3.3-70b-versatile"
+GENERATION_MODEL = "openai/gpt-oss-120b"
 
 # Quality-first: 20 candidates per channel, rerank EVERY call.
 CANDIDATE_K = 20
